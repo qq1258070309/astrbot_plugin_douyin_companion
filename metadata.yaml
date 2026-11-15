@@ -2,7 +2,7 @@ name: astrbot_plugin_douyin_companion
 display_name: 抖音陪伴 · 共同经历
 short_desc: 抖音只读能力 + 推荐流/评论/私信/点赞/转发/投稿（受写闸门约束），可接入陪伴小屋记忆。
 author: qq1258070309
-version: 0.3.0
+version: 0.3.1
 repo: https://github.com/qq1258070309/astrbot_plugin_douyin_companion
 license: MIT
 desc: >-

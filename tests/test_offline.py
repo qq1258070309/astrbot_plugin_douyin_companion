@@ -298,6 +298,10 @@ class V020Tests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    @unittest.skipUnless(
+        (Path(__file__).resolve().parents[1] / "UPSTREAM_BASE").is_file(),
+        "安装包不含上游基线（仅源码仓库有），跳过哨兵一致性检查",
+    )
     def test_upstream_baseline_has_no_unmapped_tools(self):
         """能力映射表必须覆盖 UPSTREAM_BASE 里所有上游工具，不留 need_review。"""
         import importlib.util

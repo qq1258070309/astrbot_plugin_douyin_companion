@@ -67,7 +67,7 @@
 
 ### 方式 A：Release zip（推荐）
 
-1. 到 **Releases** 下载 `astrbot_plugin_douyin_companion-v0.3.0.zip`。
+1. 到 **Releases** 下载最新的 `astrbot_plugin_douyin_companion-v0.3.1.zip`。
 2. **AstrBot WebUI → 插件 → 本地安装 / 上传插件**，选择该 zip。
 3. 重载插件，发 `/抖音状态` 自检。
 

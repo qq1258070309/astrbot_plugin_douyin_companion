@@ -2,6 +2,16 @@
 
 本文件记录 `astrbot_plugin_douyin_companion` 的版本变化。版本号遵循语义化版本规范。
 
+## 0.3.1
+
+修 0.3.0 安装包里的一个自检缺陷：`UPSTREAM_BASE` / `docs/UPSTREAM_MAPPING.md`
+只存在于源码仓库，不在 Release zip 内，导致在「已安装」形态下跑 `unittest` 会
+`FileNotFoundError`。该用例改为**文件不存在时跳过**，并在跳过原因里写明。
+
+- 运行时逻辑未变，功能与 0.3.0 完全一致。
+- `tools/vendor_browser_driver.py` 固定写 LF，避免 Windows 生成的 CRLF 与 CI 不一致
+  （0.3.0 的 zip 内容归一化后无差异，仅字节不同）。
+
 ## 0.3.0
 
 接上**账号侧能力**：推荐流、评论、私信收件箱、点赞、发评论、转发、发私信、投稿。
