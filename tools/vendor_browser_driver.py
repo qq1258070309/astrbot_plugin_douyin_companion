@@ -117,7 +117,9 @@ def main() -> int:
         return 1
 
     TARGET.parent.mkdir(parents=True, exist_ok=True)
-    TARGET.write_text(rendered, encoding="utf-8")
+    # 固定 LF：vendored 文件必须与 CI checkout 后一致，避免 Windows 上生成 CRLF
+    with TARGET.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(rendered)
     print(f"已生成 {TARGET}（{len(rendered.splitlines())} 行，"
           f"sha256={hashlib.sha256(rendered.encode('utf-8')).hexdigest()[:16]}）")
     return 0
