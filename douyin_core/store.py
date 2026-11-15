@@ -122,6 +122,70 @@ class DouyinStore:
                 break
         return items
 
+    def remember(self, key: str, content: str, *, tag: str = "manual",
+                 source: str = "douyin_remember") -> str:
+        """显式记忆写入：与 ``dy_remember`` 对应，但落到本插件身份隔离的 SQLite。
+
+        返回稳定的 memory_id；同一内容按 identity_key + 内容哈希幂等。
+        """
+        import hashlib
+        text = str(content or "").strip()[:4000]
+        if not text:
+            raise ValueError("记忆内容不能为空")
+        memory_id = "dy-" + hashlib.sha256(
+            f"{key}\n{tag}\n{text}".encode("utf-8")
+        ).hexdigest()[:20]
+        with self._lock:
+            self._db.execute(
+                "INSERT OR REPLACE INTO companion_records"
+                "(source_plugin, memory_id, identity_key, kind, content, occurred_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (source, memory_id, key, tag, text, time.time()),
+            )
+            self._db.commit()
+        return memory_id
+
+    def recent_memories(self, key: str, limit: int = 5) -> list[dict[str, str]]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT memory_id, kind, content, occurred_at FROM companion_records "
+                "WHERE identity_key = ? AND source_plugin = 'douyin_remember' "
+                "ORDER BY occurred_at DESC LIMIT ?",
+                (key, max(0, min(int(limit), 20))),
+            ).fetchall()
+        return [{"id": r[0], "tag": r[1] or "", "content": r[2] or "",
+                 "occurred_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r[3]))}
+                for r in rows]
+
+    def search_all(self, key: str, query: str, limit: int, max_chars: int) -> list[dict[str, str]]:
+        """自动召回 = 抖音共同经历 + douyin_remember 显式记忆，共用同一身份与预算。"""
+        items = self.search_videos(key, query, limit, max_chars)
+        used = sum(len(i["content"]) for i in items)
+        if len(items) >= limit or used >= max_chars:
+            return items[:limit]
+        pattern = f"%{query[:40]}%" if query and query.strip() else "%"
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT memory_id, kind, content, occurred_at FROM companion_records "
+                "WHERE identity_key = ? AND source_plugin = 'douyin_remember' "
+                "AND content LIKE ? ORDER BY occurred_at DESC LIMIT 50",
+                (key, pattern),
+            ).fetchall()
+        for memory_id, tag, content, occurred_at in rows:
+            text = f"记忆（{tag or 'manual'}）：{content}"
+            if used + len(text) > max_chars:
+                continue
+            used += len(text)
+            items.append({
+                "id": f"memory:{memory_id}",
+                "content": text,
+                "occurred_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(occurred_at)),
+                "source": "astrbot_plugin_douyin_companion",
+            })
+            if len(items) >= limit:
+                break
+        return items
+
     # ------------------------------------------- companion.external-memory.v1 --
     def upsert_record(self, record: dict[str, Any]) -> str | None:
         """以 source_plugin + memory_id 幂等写入；无归属记录直接拒收。"""

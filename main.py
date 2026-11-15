@@ -36,6 +36,8 @@ from .douyin_core import (
 from .douyin_core.backend import DyCliBackend
 from .douyin_core.media import MediaService
 from .douyin_core.store import DouyinStore
+from .douyin_core.understanding import UnderstandingService
+from .douyin_core.maintenance import CAPABILITIES, MaintenanceService
 
 PLUGIN_NAME = "astrbot_plugin_douyin_companion"
 COMPANION_PLUGIN_ID = "astrbot_plugin_private_companion"
@@ -86,6 +88,16 @@ class DouyinCompanionPlugin(Star):
             cache_limit_mb=clamp(self.config.get("media_cache_mb"), 50, 5000, 800),
         )
         self.store = DouyinStore(self._data_dir / "douyin_companion.sqlite3")
+        self.understanding = UnderstandingService(
+            media=self.media, data_dir=self._data_dir,
+            enable_asr=bool(self.config.get("enable_asr", False)),
+            asr_model=str(self.config.get("asr_model") or "base"),
+        )
+        self.maintenance = MaintenanceService(
+            data_dir=self._data_dir, cookie_file=cookie_file,
+            python_path=self.backend.python_path,
+            media_cache_mb=clamp(self.config.get("media_cache_mb"), 50, 5000, 800),
+        )
         self.write_gate = WriteGate(
             writes_enabled=bool(self.config.get("writes_enabled", False)),
             allow_targets=tuple(str(self.config.get("allow_send_targets") or "").split(",")),
@@ -194,7 +206,7 @@ class DouyinCompanionPlugin(Star):
         try:
             self._maybe_rediscover()
             key = identity_key(request.get("context"))
-            items = self.store.search_videos(
+            items = self.store.search_all(
                 key,
                 str(request.get("query") or ""),
                 int(request.get("limit") or 0),
@@ -386,6 +398,91 @@ class DouyinCompanionPlugin(Star):
             if chain:
                 yield event.chain_result(chain)
 
+    def _event_key(self, event: AstrMessageEvent) -> str:
+        return identity_key({
+            "umo": getattr(event, "unified_msg_origin", ""),
+            "sender": event.get_sender_id(),
+            "group": event.get_group_id(),
+            "platform": event.get_platform_name(),
+        })
+
+    @filter.command("抖音能力", alias={"dycaps"})
+    async def cmd_capabilities(self, event: AstrMessageEvent):
+        """列出与上游 dsh-douyin-life 的能力映射（已实现 / 部分 / 未移植）。"""
+        lines = ["抖音陪伴 · 能力矩阵（对照 kdcadmin/dsh_douyin_tools）"]
+        for row in CAPABILITIES:
+            mark = {"implemented": "✅", "partial": "🟡", "not_ported": "⬜"}[row["status"]]
+            lines.append(f"{mark} {row['upstream']} → {row['ours']}：{row['note']}")
+        lines.append("⬜ 账号写操作一律不提供；闸门默认全关。")
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("抖音自检", alias={"dydoctor"})
+    async def cmd_selfcheck(self, event: AstrMessageEvent):
+        """真跑一次依赖自检：Python / cookie / ffmpeg / ffprobe / aiohttp / ASR / 数据目录。"""
+        report = self.maintenance.selfcheck(
+            quota=self.gate.quota(), write_gate=self.write_gate.describe()
+        )
+        lines = [report["summary"],
+                 f"核心依赖：{sum(report['checks'].values())}/{len(report['checks'])} 就绪",
+                 f"能力：已实现 {report['implemented']} / 部分 {report['partial']} / 未移植 {report['not_ported']}",
+                 f"缓存：{self.maintenance.cache_health()['ratio'] * 100:.1f}% 占用",
+                 f"上游：kdcadmin/dsh_douyin_tools（哨兵见 .github/workflows/upstream-watch.yml）"]
+        for name, ok in report["checks"].items():
+            lines.append(f"  {'✅' if ok else '⚠️'} {name}")
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("抖音清理", alias={"dyclean"})
+    async def cmd_cleanup(self, event: AstrMessageEvent, confirm: str = ""):
+        """清理媒体/证据/日志缓存；默认 dry-run，传 confirm 才真正删除。"""
+        really = str(confirm or "").strip().lower() in ("confirm", "yes", "确认")
+        result = self.maintenance.cleanup(dry_run=not really)
+        if result["dry_run"]:
+            yield event.plain_result(
+                f"DRY_RUN：将删除 {result['would_remove']} 个文件、"
+                f"约 {result['bytes_would_free'] // 1024} KB。确认请发 /抖音清理 confirm"
+            )
+        else:
+            yield event.plain_result(
+                f"已删除 {result['removed']} 个文件、约 {result['bytes_freed'] // 1024} KB。"
+            )
+
+    @filter.command("抖音理解", alias={"dyunderstand"})
+    async def cmd_understand(self, event: AstrMessageEvent, target: str = "", count: int = 6):
+        """下载并抽帧 + 可选 ASR，生成视频理解证据 JSON。"""
+        if not self.enabled:
+            yield event.plain_result("插件已停用。")
+            return
+        expanded = await self.media.expand_short_url(target) if target else target
+        aweme_id = extract_aweme_id(expanded) or extract_aweme_id(target)
+        if not aweme_id:
+            yield event.plain_result("请给出 aweme_id 或抖音链接。")
+            return
+        evidence = await self.understanding.understand(aweme_id, max(4, min(int(count or 6), 12)))
+        lines = [
+            f"视频 {aweme_id}：{evidence['meta'].get('desc') or '(无文案)'}",
+            f"抽帧 {evidence['frame_count']} 张；ASR {evidence['transcript']['status']}",
+            f"证据：{evidence['evidence_path']}",
+        ]
+        if evidence["transcript"].get("text"):
+            lines.append("转写：" + evidence["transcript"]["text"][:200])
+        if evidence["notes"]:
+            lines.append("提示：" + "；".join(evidence["notes"][:3]))
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("抖音记忆", alias={"dyremember"})
+    async def cmd_remember(self, event: AstrMessageEvent, content: str = "", tag: str = "manual"):
+        """显式记一条与抖音相关的共同经历，供陪伴小屋召回。"""
+        text = str(content or "").strip()
+        if not text:
+            recent = self.store.recent_memories(self._event_key(event), 5)
+            yield event.plain_result(
+                "最近记忆：\n" + "\n".join(f"- {m['content']}" for m in recent)
+                if recent else "还没有记忆。用法：/抖音记忆 <内容>"
+            )
+            return
+        memory_id = self.store.remember(self._event_key(event), text, tag=str(tag))
+        yield event.plain_result(f"已记住（{memory_id}）：{text[:80]}")
+
     # ============================================================== LLM 工具
     @filter.llm_tool(name="douyin_hot")
     async def tool_hot(self, event: AstrMessageEvent, count: int = 10) -> MessageEventResult:
@@ -491,4 +588,105 @@ class DouyinCompanionPlugin(Star):
         yield event.plain_result(
             f"视频 {aweme_id}（{result['author'] or '未知作者'}）：{result['desc'] or '(无文案)'}\n"
             f"共 {len(result['frames'])} 帧：\n" + "\n".join(result["frames"])
+        )
+
+    @filter.llm_tool(name="douyin_hot_videos")
+    async def tool_hot_videos(self, event: AstrMessageEvent, keyword: str,
+                              limit: int = 5) -> MessageEventResult:
+        """读取某个热点话题下的视频。注意：本实现是按热词搜索，不是抖音官方热点视频接口。
+
+        Args:
+            keyword(string): 热点关键词或热榜标题
+            limit(number): 返回条数，1 到 20，默认 5
+        """
+        if not (self.enabled and self.enable_llm_tools):
+            yield event.plain_result("抖音能力未启用。")
+            return
+        keyword = str(keyword or "").strip()
+        if not keyword:
+            yield event.plain_result("[invalid_args] 热点关键词不能为空。")
+            return
+        limit = max(1, min(int(limit or 5), self.gate.config.max_results))
+        try:
+            result = await self.backend.hot_videos(keyword, limit)
+        except DouyinError as error:
+            yield event.plain_result(f"[{error.code}] {redact_text(error.message)}")
+            return
+        lines = [f"热点「{keyword}」相关视频 {result['count']} 条（{result['source']}）"]
+        for item in result["items"]:
+            author = (item.get("author") or {}).get("nickname") or "未知"
+            lines.append(f"- {item.get('title') or '(无文案)'} | {author} | {item.get('aweme_id')}")
+        lines.append(result["note"])
+        yield event.plain_result("\n".join(lines))
+
+    @filter.llm_tool(name="douyin_remember")
+    async def tool_remember(self, event: AstrMessageEvent, content: str,
+                            tag: str = "manual") -> MessageEventResult:
+        """把一条与抖音有关的共同经历写入记忆，供后续对话和陪伴小屋召回。只写本地，不做任何账号操作。
+
+        Args:
+            content(string): 要记住的内容，不能为空
+            tag(string): 分类标签，默认 manual
+        """
+        text = str(content or "").strip()
+        if not text:
+            yield event.plain_result("[invalid_args] 记忆内容不能为空。")
+            return
+        try:
+            memory_id = self.store.remember(self._event_key(event), text, tag=str(tag or "manual"))
+        except ValueError as error:
+            yield event.plain_result(f"[invalid_args] {error}")
+            return
+        yield event.plain_result(f"已记住（{memory_id}）：{text[:120]}")
+
+    @filter.llm_tool(name="douyin_understand")
+    async def tool_understand(self, event: AstrMessageEvent, target: str,
+                              count: int = 6) -> MessageEventResult:
+        """下载抖音视频并生成理解证据：均匀抽帧 + 可选语音转写 + 结构化 JSON。帧路径交给视觉模型解读。
+
+        Args:
+            target(string): aweme_id 或抖音视频/分享链接
+            count(number): 抽帧数量，4 到 12，默认 6
+        """
+        if not (self.enabled and self.enable_llm_tools and self.enable_frames):
+            yield event.plain_result("视频理解未启用（需打开 enable_frames 并安装 ffmpeg）。")
+            return
+        expanded = await self.media.expand_short_url(str(target or ""))
+        aweme_id = extract_aweme_id(expanded) or extract_aweme_id(target)
+        if not aweme_id:
+            yield event.plain_result("[invalid_args] 需要合法的 aweme_id 或抖音链接。")
+            return
+        evidence = await self.understanding.understand(aweme_id, max(4, min(int(count or 6), 12)))
+        lines = [
+            f"视频 {aweme_id}：{evidence['meta'].get('desc') or '(无文案)'}",
+            f"抽帧 {evidence['frame_count']} 张 / ASR {evidence['transcript']['status']}",
+            f"证据文件：{evidence['evidence_path']}",
+        ]
+        if evidence["transcript"].get("text"):
+            lines.append("转写：" + evidence["transcript"]["text"][:300])
+        if evidence["frames"]:
+            lines.append("帧路径：\n" + "\n".join(evidence["frames"][:6]))
+        if evidence["notes"]:
+            lines.append("提示：" + "；".join(evidence["notes"][:3]))
+        yield event.plain_result("\n".join(lines))
+
+    @filter.llm_tool(name="douyin_replay")
+    async def tool_replay(self, event: AstrMessageEvent, target: str) -> MessageEventResult:
+        """回放之前生成过的视频理解证据（只读本地文件，不联网）。
+
+        Args:
+            target(string): aweme_id 或抖音视频/分享链接
+        """
+        aweme_id = extract_aweme_id(str(target or ""))
+        if not aweme_id:
+            yield event.plain_result("[invalid_args] 需要合法的 aweme_id 或抖音链接。")
+            return
+        evidence = self.understanding.replay(aweme_id)
+        if evidence is None:
+            yield event.plain_result(f"没有视频 {aweme_id} 的证据记录，请先调用 douyin_understand。")
+            return
+        yield event.plain_result(
+            f"证据 {aweme_id}：{evidence['frame_count']} 帧 / "
+            f"ASR {evidence['transcript']['status']}\n"
+            f"帧：\n" + "\n".join(evidence["frames"][:6])
         )

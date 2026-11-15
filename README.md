@@ -14,14 +14,20 @@
 
 | ✅ 提供 | ❌ 不提供 |
 | --- | --- |
-| 抖音热榜（无需登录） | 发私信、发评论、发布视频 |
-| 关键词搜索（`search_id` 链式翻页） | 点赞、关注、养号、批量抓取 |
-| 视频详情（文案 / 作者 / 互动数据） | 自动过验证码、打码平台、伪造设备指纹 |
-| 短链展开 → 无水印直链 → 下载 → ffmpeg 抽帧 | 任何形式的账号写操作 |
-| 单 worker 限频 / 小时配额 / 高斯抖动 / 指数退避 | 一个额外的 HTTP 端口 |
-| 凭证全链路脱敏、缺失字段返回 `null` | 把 cookie 写进日志或消息 |
+| 抖音热榜（无需登录）、热点视频（按热词搜索，已标注非官方接口） | 发私信、发评论、发布视频 |
+| 关键词搜索（`search_id` 链式翻页）、视频详情 | 点赞、关注、养号、批量抓取 |
+| 短链展开 → 无水印直链 → 下载 → ffmpeg 均匀抽帧 | 自动过验证码、打码平台、伪造设备指纹 |
+| **视频理解证据链**：抽帧 + 可选 faster-whisper ASR + 证据 JSON + 回放 | 任何形式的账号写操作 |
+| **显式记忆写入** `douyin_remember`，参与陪伴小屋自动召回 | 一个额外的 HTTP 端口 |
+| **真跑依赖自检** / 能力矩阵 / 有界 dry-run 清理 | 把 cookie 写进日志或消息 |
+| 单 worker 限频 / 小时配额 / 高斯抖动 / 指数退避 | 高频硬刷 |
+| 凭证全链路脱敏、缺失字段返回 `null` | 编造抓不到的数据 |
 
 **随包写工具数量：0**。`writes_enabled` 默认 `false`。
+
+> 0.2.0 起以 [`kdcadmin/dsh_douyin_tools`](https://github.com/kdcadmin/dsh_douyin_tools)
+> （`dsh-douyin-life`，MIT / TiAmoSS）为**能力参考上游**，由哨兵持续跟踪其变更；
+> 详见 [UPSTREAM_SYNC.md](UPSTREAM_SYNC.md) 与 `docs/UPSTREAM_MAPPING.md`。
 
 ---
 
@@ -90,11 +96,17 @@ AstrBot/data/plugin_data/astrbot_plugin_douyin_companion/home/.dy/cookies/defaul
 | `/抖音 <aweme_id 或分享链接>` | 视频详情；开启抽帧后附前 3 张关键帧 |
 | `/抖音热榜 [条数]` | 热榜，默认 10 条 |
 | `/抖音搜索 <关键词> [条数]` | 关键词搜索，默认 5 条 |
-| `/抖音状态` | 后端 / 登录态 / 配额 / 陪伴小屋接入 / 写能力自检 |
+| `/抖音理解 <链接> [帧数]` | 视频理解证据链（抽帧 + 可选 ASR + 证据 JSON） |
+| `/抖音记忆 <内容> [标签]` | 显式记一条共同经历；不带参数查看最近 5 条 |
+| `/抖音状态` | 后端 / 登录态 / 配额 / 陪伴小屋接入自检 |
+| `/抖音自检` | 真跑依赖矩阵 + 配额 + 缓存占用 |
+| `/抖音能力` | 对照上游的能力矩阵（已实现 / 部分 / 未移植） |
+| `/抖音清理 [confirm]` | 清理媒体/证据/日志缓存；**默认 DRY_RUN** |
 | `/抖音写权限` | 查看写操作三道闸状态（只读展示） |
 
-启用 `enable_llm_tools` 后，主模型可调用 4 个工具：
-`douyin_hot` · `douyin_search` · `douyin_video` · `douyin_frames`。
+启用 `enable_llm_tools` 后，主模型可调用 **8 个工具**：
+`douyin_hot` · `douyin_search` · `douyin_video` · `douyin_frames` ·
+`douyin_hot_videos` · `douyin_understand` · `douyin_replay` · `douyin_remember`。
 
 ---
 
@@ -125,6 +137,26 @@ context.get_all_stars()
 
 ---
 
+## 🔄 上游同步与自动更新
+
+完整机制见 [UPSTREAM_SYNC.md](UPSTREAM_SYNC.md)。
+
+| 能力 | 落地 |
+| --- | --- |
+| **同步** | `.github/workflows/upstream-watch.yml` 每 6h 检查 `kdcadmin/dsh_douyin_tools` 的 main HEAD + `dy_*` 工具清单；变更 → 刷新 `docs/UPSTREAM_MAPPING.md` + 开 Issue 提醒审查。**不自动改插件代码**（Node/Cordis ≠ Python/Star） |
+| **更新** | `.github/workflows/release.yml`：打 `v*` tag 自动跑编译 + 单测 → 构建 zip + sha256 → 发 Release；也可 Actions 手动触发 |
+| **AstrBot 检查更新** | `metadata.yaml` 的 `repo` 指向本仓库，AstrBot 依据默认分支版本号 + GitHub Release 判断更新；每次升级只需改版本并打 tag |
+
+本地手动跑哨兵（默认 DRY_RUN，不写文件）：
+
+```bash
+git clone --depth 1 https://github.com/kdcadmin/dsh_douyin_tools.git /tmp/upstream
+python tools/upstream_diff.py --upstream-dir /tmp/upstream          # 只看
+python tools/upstream_diff.py --upstream-dir /tmp/upstream --write  # 落盘报告
+```
+
+> 上游仓库没有 tag/release，所以哨兵按 **commit SHA + 工具清单哈希** 判变更。
+
 ## 🔧 配置项
 
 | 配置 | 默认 | 说明 |
@@ -134,6 +166,8 @@ context.get_all_stars()
 | `enable_memory_provider` | `true` | 接入陪伴小屋记忆 |
 | `auto_capture_links` | `true` | 旁路链接归档 |
 | `enable_frames` | `false` | 下载 + 抽帧（需 ffmpeg） |
+| `enable_asr` / `asr_model` | `false` / `base` | 视频理解时对成片做本地转写（需 faster-whisper） |
+| `upstream_repo` | `kdcadmin/dsh_douyin_tools` | 能力参考上游，仅状态展示 |
 | `python_path` | `""` | 装了 dy-cli 的解释器 |
 | `cookie_file` | `""` | storage_state 路径 |
 | `ffmpeg_path` / `ffprobe_path` | `ffmpeg` / `ffprobe` | 抽帧工具 |
@@ -156,16 +190,23 @@ douyin_core/                   平台无关领域层（不 import AstrBot SDK）
   redact.py                    凭证脱敏 / ANSI 清理
   normalize.py                 「缺失即 null」归一化 + id 提取
   gate.py                      单 worker 配额门 + 写操作三道闸
-  backend.py                   dy-cli 异步子进程 / JSON 信封解析
+  backend.py                   dy-cli 异步子进程 / JSON 信封解析 / 热点视频
   media.py                     无水印直链 / 下载 / 抽帧
-  store.py                     SQLite：按完整身份隔离
+  store.py                     SQLite：按完整身份隔离 + 显式记忆
+  understanding.py             视频理解证据链（抽帧 + ASR + 证据 JSON + 回放）
+  maintenance.py               自检 / 能力矩阵 / 有界 dry-run 清理
 tools/dy_query_adapter.py      上游 MIT 的 --offset / search_id 分页补丁
-tests/test_offline.py          20 个离线单测（不联网、不发消息）
+tools/upstream_diff.py         上游能力哨兵（默认 DRY_RUN）
+.github/workflows/             release.yml（自动发版）+ upstream-watch.yml（上游哨兵）
+docs/UPSTREAM_MAPPING.md       自动生成的上游能力映射表
+UPSTREAM_BASE                  上游基线（commit / version / 工具哈希）
+UPSTREAM_SYNC.md               同步 / 更新 / 移植说明
+tests/test_offline.py          离线单测（不联网、不发消息）
 metadata.yaml / _conf_schema.json / requirements.txt
 ```
 
-> Release 的 zip 由 `.github/scripts/build_release.py` 按白名单打包，只含上表
-> 21 个文件（不含 CI 脚本与开发文件），解压即为一层完整的插件目录。
+> Release 的 zip 由 `.github/scripts/build_release.py` 按白名单打包，只含插件运行时
+> 文件（不含 CI 工作流、哨兵脚本与报告），解压即为一层完整的插件目录。
 > 改编来源与许可归属见 `NOTICE.md` / `LICENSE-UPSTREAM`。
 
 ---

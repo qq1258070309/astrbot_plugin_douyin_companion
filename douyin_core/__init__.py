@@ -12,6 +12,8 @@ from .normalize import (
 )
 from .redact import redact, redact_text, strip_ansi
 from .store import DouyinStore, identity_key
+from .understanding import UnderstandingService, doctor as understanding_doctor
+from .maintenance import CAPABILITIES, MaintenanceService
 
 __all__ = [
     "DouyinError", "map_error_text", "normalize_code",
@@ -20,4 +22,5 @@ __all__ = [
     "normalize_aweme", "normalize_comments", "normalize_hot_items",
     "normalize_search_payload", "normalize_stats", "normalize_user", "video_url",
     "redact", "redact_text", "strip_ansi", "DouyinStore", "identity_key",
+    "UnderstandingService", "understanding_doctor", "MaintenanceService", "CAPABILITIES",
 ]

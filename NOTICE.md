@@ -29,6 +29,25 @@
 
 **明确未移植的部分**：Cordis `apply/ctx.effect/ctx.tools.register` 外壳、`cordis.patch.yml`、FastAPI `:7709` 本地服务、Playwright 私信/群聊驱动、登录状态机、评论与发布工具。这些与 AstrBot 场景不匹配，或属于不可逆写操作，已按 `04-改编方案与集成说明.md` 显式裁掉。
 
+## 1b. kdcadmin/dsh_douyin_tools（MIT）— 0.2.0 起的能力参考上游
+
+- 项目：<https://github.com/kdcadmin/dsh_douyin_tools>，包名 `dsh-douyin-life`，v0.2.9
+- 许可：**MIT License**，`Copyright (c) 2026 TiAmoSS`（原文见其仓库 `LICENSE`）
+- 本插件**未复制其任何源码**（它是 Node 22 / Cordis / DSH 插件），仅参考其公开的能力设计、
+  工具命名与 `video-understanding-lab` 的五阶段思路，用 Python 重新实现：
+
+| 本插件实现 | 参考的上游能力 |
+| --- | --- |
+| `douyin_understand` / `douyin_frames` / `douyin_replay` | `dy_watch` / `dy_thumb`、`video-understanding-lab`（doctor / prepare / asr / record / replay） |
+| `douyin_hot_videos` | `dy_hot_videos`（本实现按热词搜索，已在返回值中标注非官方接口） |
+| `douyin_remember` | `dy_remember` |
+| `douyin_selfcheck` / `/抖音能力` | `dy_status` / `dy_selfcheck` 的依赖矩阵口径 |
+| `douyin_cleanup` / `/抖音清理` | `dy_cleanup` 的有界清理与 dry-run 约束 |
+
+- `tools/upstream_diff.py` 与 `docs/UPSTREAM_MAPPING.md` 用于持续跟踪该上游的能力清单变化，
+  **不做代码 merge**；详见 `UPSTREAM_SYNC.md`。
+- 上游的账号写能力（点赞 / 评论 / 转发 / 私信 / 投稿）**一律未移植**，本插件随包写工具恒为 0。
+
 ## 2. 陪伴小屋（AGPL-3.0-only）— 仅接口引用
 
 - 项目：<https://github.com/menglimi/astrbot_plugin_private_companion>

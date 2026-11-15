@@ -2,6 +2,47 @@
 
 本文件记录 `astrbot_plugin_douyin_companion` 的版本变化。版本号遵循语义化版本规范。
 
+## 0.2.0
+
+以 [`kdcadmin/dsh_douyin_tools`](https://github.com/kdcadmin/dsh_douyin_tools)
+（`dsh-douyin-life` v0.2.9，MIT）为**能力参考上游**，新增同步/更新管线并增强只读能力。
+
+### 新增：能力（8 个 LLM 工具 / 10 条指令）
+
+- `douyin_hot_videos`：热点视频（**按热词搜索实现，返回值明确标注非官方接口**）。
+- `douyin_understand`：视频理解证据链 —— 下载 → ffmpeg 均匀抽帧 → 可选
+  `faster-whisper` 本地 ASR → 结构化证据 JSON 落盘 → `douyin_replay` 可回放。
+  借鉴上游 `video-understanding-lab` 的 doctor/prepare/asr/record/replay 五阶段，
+  依赖缺失时如实返回 `skipped` + notes，**不编数据**。
+- `douyin_remember`：显式记忆写入，落到本插件身份隔离的 SQLite，并参与陪伴小屋
+  `read` 自动召回（新增 `DouyinStore.search_all()`）。
+- `douyin_selfcheck` / `/抖音自检` / `/抖音能力`：真跑依赖矩阵（ffmpeg / ffprobe /
+  aiohttp / faster_whisper / cookie / 数据目录）+ 配额 + 缓存占用 + 能力矩阵。
+- `/抖音清理`：有界（≤200 文件）+ **默认 DRY_RUN**，传 `confirm` 才真正删除。
+- 新增领域模块 `douyin_core/understanding.py`、`douyin_core/maintenance.py`。
+
+### 新增：同步与自动更新
+
+- `.github/workflows/upstream-watch.yml`：每 6h 检查上游 main HEAD + `dy_*` 工具清单；
+  变更时刷新 `docs/UPSTREAM_MAPPING.md`、更新 `UPSTREAM_BASE`、开 Issue 提醒审查。
+  **不自动改插件代码**（Node/Cordis ≠ Python/AstrBot Star）。
+- `tools/upstream_diff.py`：默认 DRY_RUN，`--check` 有变更返回 1，`--write` 才落盘，
+  支持 `--online` 直接抓 raw 文件。
+- `.github/workflows/release.yml` 改为 **`v*` tag 触发 + 手动 dispatch**，自动跑
+  `compileall` + `unittest` → 白名单构建 zip + sha256 → 发布 Release；
+  版本从 `metadata.yaml` 读取。AstrBot 据此检查插件更新。
+- `UPSTREAM_BASE` / `docs/UPSTREAM_MAPPING.md` / `docs/UPSTREAM_CHANGE.md` / `UPSTREAM_SYNC.md`。
+
+### 配置
+
+新增 `enable_asr`、`asr_model`、`upstream_repo`；`_conf_schema.json` 现 23 项。
+
+### 明确未移植
+
+`dy_feed` 推荐流、`dy_comments` 评论、`dy_my_posts`、`dy_dm_inbox` 依赖浏览器 CDP/页面 XHR；
+`dy_like` / `dy_comment` / `dy_share` / `dy_chat_*` / `dy_publish` / `dy_reply*` 属账号写操作
+（上游也默认全关），本插件 `WriteGate` 保留判定器但**随包写工具仍为 0**。逐项理由见能力映射表。
+
 ## 0.1.0
 
 首个公开版本。把 `JianHeShui/dsh-douyin`（MIT）的只读抖音能力改编为 AstrBot `Star` 插件。

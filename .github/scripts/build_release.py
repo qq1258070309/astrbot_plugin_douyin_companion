@@ -22,15 +22,16 @@ EXCLUDE_DIRS = {
 EXCLUDE_SUFFIXES = {".pyc", ".pyo", ".zip", ".tar.gz", ".sqlite3", ".log"}
 EXCLUDE_FILES = {".DS_Store", "Thumbs.db", ".env"}
 
-# 白名单：仓库里同时保留了上游 dsh-douyin 的源码作为溯源参考，
-# Release zip 只打 AstrBot 插件自身的文件，避免把 index.js / lib / python 等混进去。
+# 白名单：Release zip 只打 AstrBot 插件运行时需要的文件，
+# 排除 CI 工作流、上游哨兵脚本、docs/ 报告与开发产物。
 ALLOWED = {
     ".gitattributes", ".gitignore", "_conf_schema.json", "CHANGELOG.md",
-    "LICENSE", "LICENSE-UPSTREAM", "NOTICE.md", "README.md",
+    "LICENSE", "LICENSE-UPSTREAM", "NOTICE.md", "README.md", "UPSTREAM_SYNC.md",
     "metadata.yaml", "main.py", "requirements.txt",
     "douyin_core/__init__.py", "douyin_core/backend.py", "douyin_core/errors.py",
-    "douyin_core/gate.py", "douyin_core/media.py", "douyin_core/normalize.py",
-    "douyin_core/redact.py", "douyin_core/store.py",
+    "douyin_core/gate.py", "douyin_core/maintenance.py", "douyin_core/media.py",
+    "douyin_core/normalize.py", "douyin_core/redact.py", "douyin_core/store.py",
+    "douyin_core/understanding.py",
     "tests/test_offline.py", "tools/dy_query_adapter.py",
 }
 

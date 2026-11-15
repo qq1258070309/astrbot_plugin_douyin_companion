@@ -159,6 +159,26 @@ class DyCliBackend:
         items = normalize_hot_items(data)[:count]
         return {"items": items, "count": len(items), "partial": False, "failures": []}
 
+    async def hot_videos(self, keyword: str, limit: int) -> dict[str, Any]:
+        """某热点下的视频。
+
+        ⚠️ 诚实标注：上游 ``dy_hot_videos`` 走页面接口；本插件没有浏览器驱动，
+        这里用「热词 → dy-cli 搜索」实现，语义等价但数据源不同，返回值里明确写出。
+        """
+        keyword = str(keyword or "").strip()
+        if not keyword:
+            raise DouyinError("invalid_args", "热点关键词不能为空。")
+        result = await self.search(keyword, max(1, min(int(limit), 20)), 1)
+        return {
+            "keyword": keyword,
+            "items": result["items"],
+            "count": result["count"],
+            "partial": result["partial"],
+            "failures": result["failures"],
+            "source": "search_by_hot_keyword (dy-cli)",
+            "note": "本实现按热词搜索，不是抖音官方「热点下的视频」接口；请勿当作官方榜单。",
+        }
+
     async def search(self, keyword: str, limit: int, pages: int, sort: str = "综合") -> dict[str, Any]:
         from .normalize import normalize_search_payload
         items: list[dict[str, Any]] = []

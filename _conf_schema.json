@@ -24,6 +24,22 @@
     "type": "bool",
     "default": false
   },
+  "enable_asr": {
+    "description": "视频理解时对成片做本地语音转写（需额外安装 faster-whisper；未安装时明确返回 skipped，不编数据）",
+    "type": "bool",
+    "default": false
+  },
+  "asr_model": {
+    "description": "faster-whisper 模型规格（仅 enable_asr=true 时生效）",
+    "type": "string",
+    "default": "base",
+    "options": ["tiny", "base", "small", "medium", "large-v3"]
+  },
+  "upstream_repo": {
+    "description": "上游能力参考仓库（仅供状态展示；实际同步由 .github/workflows/upstream-watch.yml 完成）",
+    "type": "string",
+    "default": "kdcadmin/dsh_douyin_tools"
+  },
   "python_path": {
     "description": "装有 dy-cli==0.2.2 的 Python 解释器绝对路径；留空则使用 AstrBot 当前解释器",
     "type": "string",

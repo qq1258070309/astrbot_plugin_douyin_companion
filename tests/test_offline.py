@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import tempfile
 import unittest
@@ -223,6 +224,97 @@ class StoreTests(unittest.TestCase):
 
     def test_reject_unowned_record(self):
         self.assertIsNone(self.store.upsert_record({"source_plugin": "x", "memory_id": "y"}))
+
+    def test_remember_is_idempotent_and_recallable(self):
+        key = identity_key({"user": "alice"})
+        first = self.store.remember(key, "一起看过猫猫视频", tag="video")
+        second = self.store.remember(key, "一起看过猫猫视频", tag="video")
+        self.assertEqual(first, second)
+        self.assertNotEqual(first, self.store.remember(key, "另一条记忆"))
+        items = self.store.search_all(key, "猫猫", 5, 2000)
+        self.assertTrue(any("猫猫视频" in item["content"] for item in items))
+        self.assertEqual(len(self.store.recent_memories(key, 5)), 2)
+        with self.assertRaises(ValueError):
+            self.store.remember(key, "   ")
+
+
+class V020Tests(unittest.TestCase):
+    """0.2.0 新增能力的离线回归：不联网、不发消息、不需要 ffmpeg/ASR。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_understanding_doctor_shape(self):
+        from douyin_core.understanding import doctor
+        state = doctor()
+        self.assertIn("ffmpeg", state["binaries"])
+        self.assertIn("faster_whisper", state["modules"])
+        self.assertFalse(state["automatic_model_backend"])
+        self.assertIsInstance(state["frames_available"], bool)
+
+    def test_selfcheck_reports_problems_not_fake_ok(self):
+        from douyin_core.maintenance import MaintenanceService, CAPABILITIES
+        service = MaintenanceService(data_dir=self.root, cookie_file=None, python_path="python")
+        report = service.selfcheck(quota={"used": 1, "limit": 60},
+                                   write_gate={"shipped_write_tools": 0})
+        self.assertTrue(report["problems"])          # cookie_file 缺失必须报出来
+        self.assertEqual(report["write_gate"]["shipped_write_tools"], 0)
+        self.assertEqual(len(report["capabilities"]), len(CAPABILITIES))
+        self.assertEqual(report["implemented"] + report["partial"] + report["not_ported"],
+                         len(CAPABILITIES))
+        # 闸门：任何账号写能力都不能标成 implemented
+        for row in CAPABILITIES:
+            if "dy_like" in row["upstream"] or "dy_publish" in row["upstream"]:
+                self.assertNotEqual(row["status"], "implemented")
+
+    def test_cleanup_default_is_dry_run(self):
+        from douyin_core.maintenance import MaintenanceService
+        media = self.root / "media" / "frames"
+        media.mkdir(parents=True)
+        victim = media / "a.jpg"
+        victim.write_bytes(b"x" * 2048)
+        service = MaintenanceService(data_dir=self.root, cookie_file=None, python_path="python")
+        preview = service.cleanup()
+        self.assertTrue(preview["dry_run"])
+        self.assertEqual(preview["removed"], 0)
+        self.assertTrue(victim.exists())
+        applied = service.cleanup(dry_run=False)
+        self.assertFalse(applied["dry_run"])
+        self.assertFalse(victim.exists())
+
+    def test_hot_videos_rejects_empty_keyword_without_network(self):
+        from douyin_core.backend import DyCliBackend
+        from douyin_core.gate import AsyncRateGate, GateConfig
+        backend = DyCliBackend(gate=AsyncRateGate(GateConfig()), data_dir=self.root)
+
+        async def scenario():
+            with self.assertRaises(DouyinError) as ctx:
+                await backend.hot_videos("   ", 5)
+            self.assertEqual(ctx.exception.code, "invalid_args")
+
+        asyncio.run(scenario())
+
+    def test_upstream_baseline_has_no_unmapped_tools(self):
+        """能力映射表必须覆盖 UPSTREAM_BASE 里所有上游工具，不留 need_review。"""
+        import importlib.util
+        repo_root = Path(__file__).resolve().parents[1]
+        base = json.loads((repo_root / "UPSTREAM_BASE").read_text(encoding="utf-8"))
+        spec = importlib.util.spec_from_file_location(
+            "upstream_diff_under_test", repo_root / "tools" / "upstream_diff.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        unmapped = [t for t in base["tools"] if t not in module.STATUS]
+        self.assertEqual(unmapped, [], f"未映射到状态的上游工具: {unmapped}")
+        self.assertEqual(base["repo"], "kdcadmin/dsh_douyin_tools")
+        self.assertEqual(len(base["tools"]), 34)
+        mapping = (repo_root / "docs" / "UPSTREAM_MAPPING.md").read_text(encoding="utf-8")
+        self.assertNotIn("need_review", mapping)
+        for tool in base["tools"]:
+            self.assertIn(f"`{tool}`", mapping)
 
 
 if __name__ == "__main__":

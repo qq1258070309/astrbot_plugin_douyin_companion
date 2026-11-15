@@ -1,0 +1,71 @@
+name: Upstream capability sentinel
+
+# 每 6 小时检查 kdcadmin/dsh_douyin_tools 的 main HEAD / 工具清单是否变化。
+# 变化 → 生成能力差异报告 + 更新基线 + 开一个 Issue 提醒审查。
+# ⚠️ 绝不自动修改插件代码：上游是 Node/Cordis，本仓库是 Python/AstrBot Star。
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Clone upstream (shallow)
+        shell: bash
+        run: git clone --depth 1 https://github.com/kdcadmin/dsh_douyin_tools.git /tmp/upstream
+
+      - name: DRY_RUN diff
+        id: diff
+        shell: bash
+        run: |
+          set +e
+          python3 tools/upstream_diff.py --upstream-dir /tmp/upstream --check | tee /tmp/diff.txt
+          code=${PIPESTATUS[0]}
+          set -e
+          if [ "$code" -eq 1 ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "上游有变更，准备写入报告"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "上游无变更"
+          fi
+
+      - name: Write capability report
+        if: steps.diff.outputs.changed == 'true'
+        shell: bash
+        run: python3 tools/upstream_diff.py --upstream-dir /tmp/upstream --write
+
+      - name: Commit report
+        if: steps.diff.outputs.changed == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add UPSTREAM_BASE docs/UPSTREAM_MAPPING.md docs/UPSTREAM_CHANGE.md
+          if git diff --cached --quiet; then
+            echo "no file changes"
+          else
+            git commit -m "chore(upstream): refresh capability report [skip ci]"
+            git push
+          fi
+
+      - name: Open review issue
+        if: steps.diff.outputs.changed == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "上游能力变更待移植 $(date -u +%F)" \
+            --body-file docs/UPSTREAM_CHANGE.md
