@@ -37,6 +37,8 @@ ALLOWED = {
     "douyin_core/action_policy.py",
     "tests/test_offline.py", "tools/dy_query_adapter.py",
     "tools/vendor_browser_driver.py",
+    # 服务器（无显示器 / proot）部署说明与启动脚本
+    "docs/SERVER.md", "scripts/server-browser-start.sh",
 }
 
 

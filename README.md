@@ -86,6 +86,10 @@ git clone https://github.com/qq1258070309/astrbot_plugin_douyin_companion.git
 - **读路径**：`dy-cli==0.2.2`（推荐独立 venv，见下）。
 - **浏览器能力**：`playwright>=1.45`。**不需要** `playwright install` —— 我们连的是你本机已装的 Chrome / Edge。
 
+> 服务器 / 无显示器 / aarch64 / proot 容器？见 **[docs/SERVER.md](docs/SERVER.md)**：
+> Xvfb + 系统 Chromium + CDP 的方案、`--no-sandbox` / `-nolock` / Windows UA 的原因，
+> 以及用 noVNC 在网页里手动登录、重启后自启的做法。
+
 ---
 
 ## ⚙️ 首次配置
