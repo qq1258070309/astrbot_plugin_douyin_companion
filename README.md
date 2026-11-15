@@ -164,9 +164,9 @@ tests/test_offline.py          20 个离线单测（不联网、不发消息）
 metadata.yaml / _conf_schema.json / requirements.txt
 ```
 
-> 仓库里另外保留了上游 `dsh-douyin` 的源码（`index.js` / `lib/` / `python/` /
-> `cordis.patch.yml` 等）作为改编溯源参考，**它们不是 AstrBot 插件的一部分**。
-> Release 的 zip 由 `.github/scripts/build_release.py` 按白名单打包，只含上表文件。
+> Release 的 zip 由 `.github/scripts/build_release.py` 按白名单打包，只含上表
+> 21 个文件（不含 CI 脚本与开发文件），解压即为一层完整的插件目录。
+> 改编来源与许可归属见 `NOTICE.md` / `LICENSE-UPSTREAM`。
 
 ---
 
