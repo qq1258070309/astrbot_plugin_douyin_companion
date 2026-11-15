@@ -1,0 +1,37 @@
+name: astrbot_plugin_douyin_companion
+display_name: 抖音陪伴 · 共同经历
+short_desc: 抖音热榜/搜索/视频理解，作为陪伴小屋的只读能力与外部记忆 Provider。
+author: qq1258070309
+version: 0.1.0
+repo: https://github.com/qq1258070309/astrbot_plugin_douyin_companion
+license: MIT
+desc: >-
+  将 dsh-douyin（DeepSeek Harness 插件，MIT）的只读抖音能力改编为 AstrBot 插件：
+  单 worker 限频、结构化错误码、凭证脱敏、缺失即 null、无水印直链解析与抽帧；
+  通过陪伴小屋官方 extension_api (companion.external-memory.v1) 接入记忆召回。
+  不提供任何抖音写操作。
+help: |
+  私聊 / 群聊指令：
+  - 抖音 <aweme_id 或分享链接>   解析视频详情（可选抽帧）
+  - 抖音热榜 [条数]              读取抖音热榜
+  - 抖音搜索 <关键词> [条数]     按关键词搜索视频
+  - 抖音状态                     后端 / 登录态 / 配额 / 陪伴小屋接入自检
+  - 抖音写权限                   查看写操作三道闸状态（本插件不提供写工具）
+
+  模型可调用工具（需开启 enable_llm_tools）：
+  douyin_hot / douyin_search / douyin_video / douyin_frames
+
+  配置请在 WebUI「插件 → 抖音陪伴」完成；登录 Cookie（Playwright storage_state）
+  需在有显示器的电脑上导出后放到插件数据目录，切勿把 cookie 写进消息或日志。
+category: 工具
+tags:
+  - 抖音
+  - 视频理解
+  - 陪伴小屋
+  - 只读
+support_platforms:
+  - aiocqhttp
+  - qq_official
+  - qq_official_webhook
+  - weixin_oc
+astrbot_version: ">=4.27.2"

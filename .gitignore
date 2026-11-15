@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 插件运行期数据（绝不进版本库）
+data/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.log
+logs/
+media/
+
+# 本地凭据 / 登录态（绝不进版本库）
+cookies/
+*cookie*.json
+storage_state*.json
+.env
+.env.*
+
+# 打包产物
+*.zip
+*.tar.gz
+dist/
+build/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

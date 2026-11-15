@@ -1,0 +1,57 @@
+name: Publish plugin release
+
+# 首次推送（commit message 含 [release]）或手动触发时，
+# 自动构建插件 zip 并发布到 Releases，供 AstrBot「本地添加插件」下载。
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message || '', '[release]')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build plugin zip
+        shell: bash
+        run: python3 .github/scripts/build_release.py --version 0.1.0
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v0.1.0
+          name: v0.1.0 · 抖音陪伴 · 共同经历
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+          files: |
+            dist/astrbot_plugin_douyin_companion-v0.1.0.zip
+            dist/astrbot_plugin_douyin_companion-v0.1.0.zip.sha256
+          body: |
+            ## 安装
+
+            下载 `astrbot_plugin_douyin_companion-v0.1.0.zip`，在 **AstrBot WebUI → 插件 → 本地安装 / 上传插件** 选择该 zip；
+            或手动解压到 `AstrBot/data/plugins/` 后重载插件。
+
+            zip 内已包含一层 `astrbot_plugin_douyin_companion/` 目录，目录名与 `metadata.yaml` 的 `name` 一致。
+            `.sha256` 文件用于校验完整性。
+
+            ## 首次配置
+
+            1. 在独立 venv 安装 `dy-cli==0.2.2` 与 `aiohttp`，把 `python_path` 指向该解释器；
+            2. 在有显示器的电脑导出抖音 Playwright `storage_state` 作为 `cookie_file`（热榜不需要登录）；
+            3. WebUI 保存一次插件配置，发 `/抖音状态` 自检。
+
+            详见仓库 README。
+
+            ## 说明
+
+            - 只读插件，**不提供任何抖音写操作**（不代发私信/评论/发布）。
+            - 使用非官方接口，仅供个人学习研究；遇风控请人工处理，不要硬刷。
+            - 许可 MIT，上游归属见 `NOTICE.md` / `LICENSE-UPSTREAM`。

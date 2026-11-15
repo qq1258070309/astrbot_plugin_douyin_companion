@@ -1,0 +1,106 @@
+{
+  "enabled": {
+    "description": "启用抖音能力（关闭后所有指令与工具返回停用提示）",
+    "type": "bool",
+    "default": true
+  },
+  "enable_llm_tools": {
+    "description": "向 AstrBot 核心回复管线注册 4 个 LLM 工具（douyin_hot / douyin_search / douyin_video / douyin_frames）",
+    "type": "bool",
+    "default": true
+  },
+  "enable_memory_provider": {
+    "description": "按 companion.external-memory.v1 契约接入陪伴小屋的记忆召回（未安装陪伴小屋时自动降级为独立模式）",
+    "type": "bool",
+    "default": true
+  },
+  "auto_capture_links": {
+    "description": "在 on_llm_request 旁路观察消息中的抖音链接并归档为「共同经历」（不改提示词、不发消息）",
+    "type": "bool",
+    "default": true
+  },
+  "enable_frames": {
+    "description": "启用视频下载 + ffmpeg 抽帧（需要 ffmpeg/ffprobe 与可用媒体直链，会占用磁盘）",
+    "type": "bool",
+    "default": false
+  },
+  "python_path": {
+    "description": "装有 dy-cli==0.2.2 的 Python 解释器绝对路径；留空则使用 AstrBot 当前解释器",
+    "type": "string",
+    "default": ""
+  },
+  "cookie_file": {
+    "description": "Playwright storage_state JSON 路径；留空则用 <插件数据目录>/home/.dy/cookies/default.json",
+    "type": "string",
+    "default": ""
+  },
+  "ffmpeg_path": {
+    "description": "ffmpeg 可执行文件（抽帧用）",
+    "type": "string",
+    "default": "ffmpeg"
+  },
+  "ffprobe_path": {
+    "description": "ffprobe 可执行文件（抽帧用）",
+    "type": "string",
+    "default": "ffprobe"
+  },
+  "max_results": {
+    "description": "单次热榜 / 搜索返回上限（硬上限 20）",
+    "type": "int",
+    "default": 20,
+    "slider": { "min": 1, "max": 20, "step": 1 }
+  },
+  "max_search_pages": {
+    "description": "单次搜索最多翻页数（硬上限 3；页间 3–8 秒高斯抖动）",
+    "type": "int",
+    "default": 1,
+    "slider": { "min": 1, "max": 3, "step": 1 }
+  },
+  "hourly_request_budget": {
+    "description": "滚动 1 小时的后端请求预算；用尽后拒绝新请求（默认 60）",
+    "type": "int",
+    "default": 60,
+    "slider": { "min": 1, "max": 500, "step": 10 }
+  },
+  "call_delay_min_ms": {
+    "description": "两次后端调用之间的最小抖动间隔（毫秒）",
+    "type": "int",
+    "default": 1800
+  },
+  "call_delay_max_ms": {
+    "description": "两次后端调用之间的最大抖动间隔（毫秒）",
+    "type": "int",
+    "default": 3200
+  },
+  "page_delay_min_ms": {
+    "description": "搜索翻页最小抖动间隔（毫秒）",
+    "type": "int",
+    "default": 3000
+  },
+  "page_delay_max_ms": {
+    "description": "搜索翻页最大抖动间隔（毫秒）",
+    "type": "int",
+    "default": 8000
+  },
+  "media_cache_mb": {
+    "description": "成片与抽帧缓存上限（MB），超出按最旧删除",
+    "type": "int",
+    "default": 800
+  },
+  "log_level": {
+    "description": "结构化日志等级",
+    "type": "string",
+    "default": "info",
+    "options": ["silent", "error", "info", "debug"]
+  },
+  "writes_enabled": {
+    "description": "写操作总闸（本版本不提供任何写工具，仅为将来扩展保留；默认必须关闭）",
+    "type": "bool",
+    "default": false
+  },
+  "allow_send_targets": {
+    "description": "写操作目标白名单（逗号分隔；本版本不提供任何写工具）",
+    "type": "string",
+    "default": ""
+  }
+}
