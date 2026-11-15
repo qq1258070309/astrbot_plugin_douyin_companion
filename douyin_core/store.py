@@ -56,6 +56,30 @@ class DouyinStore:
                 occurred_at   REAL,
                 PRIMARY KEY (source_plugin, memory_id)
             );
+            CREATE TABLE IF NOT EXISTS action_ledger (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                action      TEXT NOT NULL,
+                target      TEXT,
+                mode        TEXT NOT NULL,
+                ok          INTEGER NOT NULL,
+                detail      TEXT,
+                created_at  REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_action_ledger_time
+                ON action_ledger(action, created_at DESC);
+            CREATE TABLE IF NOT EXISTS dm_messages (
+                identity_key TEXT NOT NULL,
+                conversation TEXT NOT NULL,
+                message_id   TEXT NOT NULL,
+                direction    TEXT,
+                kind         TEXT,
+                text         TEXT,
+                aweme_id     TEXT,
+                occurred_at  REAL NOT NULL,
+                PRIMARY KEY (identity_key, conversation, message_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_dm_messages_time
+                ON dm_messages(identity_key, occurred_at DESC);
             """
         )
         self._db.commit()
@@ -185,6 +209,101 @@ class DouyinStore:
             if len(items) >= limit:
                 break
         return items
+
+    # ------------------------------------------------- 写操作账本 / 私信 ---------
+    def log_action(self, *, action: str, target: str, mode: str, ok: bool, detail: str = "") -> None:
+        """记每一次进入 live 的写操作（dry_run 不记账，否则会吃掉额度）。"""
+        if mode != "live":
+            return
+        with self._lock:
+            self._db.execute(
+                "INSERT INTO action_ledger(action, target, mode, ok, detail, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (action, target, mode, 1 if ok else 0, detail, time.time()),
+            )
+            self._db.commit()
+
+    def count_actions_today(self, action: str, since: float) -> int:
+        """按自然日统计**实际执行过**的次数（失败也算，因为同样触达了平台）。"""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT COUNT(*) FROM action_ledger WHERE action = ? AND mode = 'live' "
+                "AND created_at >= ?",
+                (action, float(since)),
+            ).fetchone()
+        return int(row[0] if row else 0)
+
+    def recent_actions(self, limit: int = 20) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT action, target, ok, detail, created_at FROM action_ledger "
+                "ORDER BY created_at DESC LIMIT ?",
+                (max(1, min(int(limit), 100)),),
+            ).fetchall()
+        return [
+            {
+                "action": r[0],
+                "target": r[1] or "",
+                "ok": bool(r[2]),
+                "detail": r[3] or "",
+                "at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r[4])),
+            }
+            for r in rows
+        ]
+
+    def put_dm(self, key: str, conversation: str, message: dict[str, Any]) -> bool:
+        """幂等写入一条私信；返回是否为新消息。DOM 伪造的 id 一律不落库。"""
+        message_id = str(message.get("messageId") or "").strip()
+        if not message_id or message_id.startswith("dom"):
+            return False
+        direction = str(message.get("direction") or "unknown")
+        if direction not in ("inbound", "outbound"):
+            return False
+        with self._lock:
+            cursor = self._db.execute(
+                "INSERT OR IGNORE INTO dm_messages"
+                "(identity_key, conversation, message_id, direction, kind, text, aweme_id, occurred_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    key, str(conversation or ""), message_id, direction,
+                    str(message.get("kind") or "text"),
+                    str(message.get("text") or "")[:2000],
+                    str(message.get("awemeId") or "") or None,
+                    time.time(),
+                ),
+            )
+            self._db.commit()
+            return cursor.rowcount > 0
+
+    def recent_dms(self, key: str, conversation: str = "", limit: int = 20) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit), 100))
+        with self._lock:
+            if conversation:
+                rows = self._db.execute(
+                    "SELECT conversation, message_id, direction, kind, text, aweme_id, occurred_at "
+                    "FROM dm_messages WHERE identity_key = ? AND conversation = ? "
+                    "ORDER BY occurred_at DESC LIMIT ?",
+                    (key, conversation, limit),
+                ).fetchall()
+            else:
+                rows = self._db.execute(
+                    "SELECT conversation, message_id, direction, kind, text, aweme_id, occurred_at "
+                    "FROM dm_messages WHERE identity_key = ? "
+                    "ORDER BY occurred_at DESC LIMIT ?",
+                    (key, limit),
+                ).fetchall()
+        return [
+            {
+                "conversation": r[0],
+                "message_id": r[1],
+                "direction": r[2],
+                "kind": r[3],
+                "text": r[4] or "",
+                "aweme_id": r[5] or "",
+                "at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r[6])),
+            }
+            for r in rows
+        ]
 
     # ------------------------------------------- companion.external-memory.v1 --
     def upsert_record(self, record: dict[str, Any]) -> str | None:

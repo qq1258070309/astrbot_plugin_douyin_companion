@@ -317,5 +317,183 @@ class V020Tests(unittest.TestCase):
             self.assertIn(f"`{tool}`", mapping)
 
 
+class ActionPolicyTests(unittest.TestCase):
+    """写操作闸门：默认拒绝、四重放行、额度按自然日累计。"""
+
+    def _policy(self, **kw):
+        from douyin_core import ActionPolicy
+
+        base = dict(writes_enabled=True, dry_run=False, actions=("like",),
+                    quotas={"like": 3}, targets=(), require_confirm=True)
+        base.update(kw)
+        return ActionPolicy(**base)
+
+    def test_default_policy_blocks_everything(self):
+        from douyin_core import ActionPolicy
+
+        policy = ActionPolicy()
+        for action in ("like", "comment", "share", "dm", "publish"):
+            decision = policy.check(action, "x", confirm=True)
+            self.assertEqual(decision.mode, "blocked", action)
+        self.assertFalse(policy.check("like", confirm=True).allowed)
+
+    def test_unknown_action_is_blocked(self):
+        decision = self._policy().check("delete_everything", confirm=True)
+        self.assertEqual(decision.mode, "blocked")
+        self.assertIn("未知", decision.reason)
+
+    def test_action_not_in_whitelist(self):
+        decision = self._policy(actions=("like",)).check("comment", "x", confirm=True)
+        self.assertEqual(decision.mode, "blocked")
+        self.assertIn("白名单", decision.reason)
+
+    def test_quota_zero_blocks(self):
+        decision = self._policy(quotas={"like": 0}).check("like", confirm=True)
+        self.assertEqual(decision.mode, "blocked")
+        self.assertIn("额度是 0", decision.reason)
+
+    def test_dry_run_takes_precedence_over_confirm(self):
+        decision = self._policy(dry_run=True).check("like", confirm=True)
+        self.assertEqual(decision.mode, "dry_run")
+        self.assertTrue(decision.preview)
+        self.assertFalse(decision.allowed)
+
+    def test_confirm_required_by_default(self):
+        decision = self._policy().check("like", confirm=False)
+        self.assertEqual(decision.mode, "dry_run")
+        self.assertIn("确认", decision.reason)
+        self.assertTrue(self._policy().check("like", confirm=True).allowed)
+
+    def test_recipient_allowlist_only_for_targeted_actions(self):
+        policy = self._policy(actions=("like", "dm"), quotas={"like": 3, "dm": 3}, targets=("小明",))
+        self.assertEqual(policy.check("dm", "小红", confirm=True).mode, "blocked")
+        self.assertTrue(policy.check("dm", "小明", confirm=True).allowed)
+        # 点赞不检查收件人
+        self.assertTrue(policy.check("like", "任意视频", confirm=True).allowed)
+
+    def test_publish_path_requires_configured_dir(self):
+        policy = self._policy(actions=("publish",), quotas={"publish": 1})
+        ok, reason = policy.check_publish_path("anything.mp4")
+        self.assertFalse(ok)
+        self.assertIn("publish_allow_dir", reason)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            inside = root / "ok.mp4"
+            inside.write_bytes(b"x")
+            outside = root.parent / "outside-douyin-test.mp4"
+            outside.write_bytes(b"x")
+            try:
+                policy2 = self._policy(actions=("publish",), quotas={"publish": 1}, publish_dir=str(root))
+                self.assertTrue(policy2.check_publish_path(str(inside))[0])
+                ok2, reason2 = policy2.check_publish_path(str(outside))
+                self.assertFalse(ok2)
+                self.assertIn("不在允许目录", reason2)
+            finally:
+                outside.unlink(missing_ok=True)
+
+    def test_quota_counts_only_live_attempts(self):
+        from douyin_core import ActionPolicy
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = DouyinStore(Path(tmp) / "t.sqlite3")
+            policy = ActionPolicy(writes_enabled=True, dry_run=False, actions=("like",),
+                                  quotas={"like": 2}, store=store)
+            preview = policy.check("like", "a")            # 需要确认 → dry_run，不记账
+            self.assertEqual(preview.mode, "dry_run")
+            policy.record(preview, ok=False)
+            self.assertEqual(policy.used_today("like"), 0)
+
+            first = policy.check("like", "a", confirm=True)
+            self.assertEqual(first.mode, "live")
+            policy.record(first, ok=True)
+            self.assertEqual(policy.used_today("like"), 1)
+            policy.record(policy.check("like", "b", confirm=True), ok=False)
+            self.assertEqual(policy.used_today("like"), 2)
+
+            third = policy.check("like", "c", confirm=True)
+            self.assertEqual(third.mode, "blocked")
+            self.assertIn("上限", third.reason)
+            store.close()
+
+
+class StoreActionTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = DouyinStore(Path(self.tmp.name) / "store.sqlite3")
+        self.key = identity_key({"umo": "test", "sender": "u1"})
+
+    def tearDown(self):
+        self.store.close()
+        self.tmp.cleanup()
+
+    def test_dm_dedupe_and_identity_isolation(self):
+        message = {"messageId": "m1", "direction": "inbound", "kind": "text", "text": "在吗"}
+        self.assertTrue(self.store.put_dm(self.key, "小明", message))
+        self.assertFalse(self.store.put_dm(self.key, "小明", message))
+        self.assertEqual(len(self.store.recent_dms(self.key)), 1)
+        other = identity_key({"umo": "test", "sender": "u2"})
+        self.assertEqual(self.store.recent_dms(other), [])
+
+    def test_dm_rejects_dom_ids_and_unknown_direction(self):
+        self.assertFalse(self.store.put_dm(self.key, "小明", {"messageId": "dom1-text", "direction": "inbound"}))
+        self.assertFalse(self.store.put_dm(self.key, "小明", {"messageId": "m2", "direction": "unknown"}))
+        self.assertFalse(self.store.put_dm(self.key, "小明", {"messageId": "", "direction": "inbound"}))
+        self.assertEqual(self.store.recent_dms(self.key), [])
+
+    def test_action_ledger_ignores_dry_run(self):
+        self.store.log_action(action="like", target="a", mode="dry_run", ok=True)
+        self.assertEqual(self.store.count_actions_today("like", 0), 0)
+        self.store.log_action(action="like", target="a", mode="live", ok=True)
+        self.assertEqual(self.store.count_actions_today("like", 0), 1)
+        self.assertEqual(self.store.count_actions_today("like", 9e12), 0)
+
+
+class VendoredDriverTests(unittest.TestCase):
+    """vendored 内核必须能导入、且不含 MCP 脚手架。"""
+
+    def test_imports_without_playwright(self):
+        from douyin_core import browser_driver as driver
+
+        self.assertTrue(callable(driver._feed_core))
+        self.assertTrue(callable(driver._like_core))
+        self.assertTrue(callable(driver._comment_core))
+        self.assertTrue(callable(driver._share_core))
+        self.assertTrue(callable(driver._publish_core))
+        self.assertTrue(callable(driver._open_conversation))
+        self.assertTrue(callable(driver._message_snapshot))
+
+    def test_no_mcp_scaffolding(self):
+        source = (Path(__file__).resolve().parents[1] / "douyin_core" / "browser_driver.py").read_text(
+            encoding="utf-8")
+        # 只检查可执行行；文件头的注释说明里会提到被删掉的符号
+        code_lines = [line for line in source.splitlines() if not line.lstrip().startswith("#")]
+        code = "\n".join(code_lines)
+        for symbol in ("from mcp.server", "FastMCP(", "mcp.tool(", "mcp.run("):
+            self.assertNotIn(symbol, code)
+
+    def test_digg_state_parser(self):
+        from douyin_core.browser_driver import _digged
+
+        self.assertTrue(_digged("digged"))
+        self.assertFalse(_digged("no-digged"))
+        self.assertFalse(_digged("no_digged"))
+        self.assertFalse(_digged(""))
+
+    def test_comment_text_normalizer(self):
+        from douyin_core.browser_driver import _norm_comment_text
+
+        self.assertEqual(_norm_comment_text("好 看 [看] ！"), "好看")
+
+    def test_vendor_script_matches_current_file(self):
+        """vendored 文件必须带来源指纹，且代码里没有残留装饰器（防手改）。"""
+        repo_root = Path(__file__).resolve().parents[1]
+        current = (repo_root / "douyin_core" / "browser_driver.py").read_text(encoding="utf-8")
+        code = "\n".join(line for line in current.splitlines() if not line.lstrip().startswith("#"))
+        self.assertIn("上游文件 sha256:", current)
+        self.assertNotIn("@restricted_tool()", code)
+        self.assertNotIn("def restricted_tool", code)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

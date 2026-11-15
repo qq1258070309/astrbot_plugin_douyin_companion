@@ -5,7 +5,7 @@
     "default": true
   },
   "enable_llm_tools": {
-    "description": "向 AstrBot 核心回复管线注册 4 个 LLM 工具（douyin_hot / douyin_search / douyin_video / douyin_frames）",
+    "description": "向 AstrBot 核心回复管线注册 16 个 LLM 工具（热榜/搜索/详情/抽帧/理解/回放/推荐流/评论/私信/点赞/发评论/转发/发私信/投稿）",
     "type": "bool",
     "default": true
   },
@@ -109,13 +109,116 @@
     "default": "info",
     "options": ["silent", "error", "info", "debug"]
   },
+  "enable_browser": {
+    "description": "启用账号侧浏览器能力（推荐流 / 评论 / 私信 / 点赞 / 转发 / 投稿）。需要安装 playwright，并使用本机 Chrome/Edge 的登录态",
+    "type": "bool",
+    "default": false
+  },
+  "browser_headless": {
+    "description": "浏览器无头模式。⚠️ 抖音在无头模式下给的是精简评论区（没有发送按钮、@ 不出联想），评论/私信请保持 false（带界面）",
+    "type": "bool",
+    "default": false
+  },
+  "browser_channel": {
+    "description": "浏览器通道：auto 自动探测，chrome / msedge 强制指定",
+    "type": "string",
+    "default": "auto",
+    "options": ["auto", "chrome", "msedge"]
+  },
+  "browser_cdp_url": {
+    "description": "连接已登录的 Chrome 调试地址（如 http://127.0.0.1:9222）；留空则用插件自己的持久 profile（首次需扫码）",
+    "type": "string",
+    "default": ""
+  },
+  "browser_chrome_path": {
+    "description": "自定义 Chrome/Edge 可执行文件路径；留空自动探测",
+    "type": "string",
+    "default": ""
+  },
+  "browser_profile_port": {
+    "description": "持久 profile 的调试端口（同一 profile 只允许一个浏览器实例，多个插件实例靠这个端口共享）",
+    "type": "int",
+    "default": 9333
+  },
+  "browser_timeout": {
+    "description": "单次浏览器操作的基础超时（秒），长任务（推荐流/投稿）另有更高上限",
+    "type": "int",
+    "default": 90,
+    "slider": { "min": 30, "max": 600, "step": 10 }
+  },
+  "feed_max_scrolls": {
+    "description": "推荐流最多滚几屏（每屏 2 秒左右，太大容易触发风控）",
+    "type": "int",
+    "default": 6,
+    "slider": { "min": 1, "max": 30, "step": 1 }
+  },
+  "dm_private_only": {
+    "description": "私信读取/发送只在私聊里允许，避免在群里泄露私信内容",
+    "type": "bool",
+    "default": true
+  },
+  "comment_mention": {
+    "description": "发评论时用真人 @ 提醒谁（填完整昵称；留空则发普通评论）。@ 会走联想面板，不是纯文本",
+    "type": "string",
+    "default": ""
+  },
+  "publish_tags": {
+    "description": "投稿时追加的话题标签（空格或逗号分隔，最多 5 个）",
+    "type": "string",
+    "default": ""
+  },
+  "publish_allow_dir": {
+    "description": "允许投稿的视频目录（绝对路径）。留空 = 禁止投稿；只有该目录内的文件才允许上传",
+    "type": "string",
+    "default": ""
+  },
+  "write_dry_run": {
+    "description": "写操作演练模式：开着时只返回「将要做什么」，绝不碰真实账号。建议先用演练确认参数",
+    "type": "bool",
+    "default": true
+  },
+  "write_actions": {
+    "description": "允许的写动作，逗号分隔，可选 like,comment,share,dm,publish；留空 = 全部禁止",
+    "type": "string",
+    "default": ""
+  },
+  "like_per_day": {
+    "description": "点赞/取消点赞每日上限（0 = 不允许）",
+    "type": "int",
+    "default": 0
+  },
+  "comment_per_day": {
+    "description": "发评论每日上限（0 = 不允许）",
+    "type": "int",
+    "default": 0
+  },
+  "share_per_day": {
+    "description": "转发视频每日上限（0 = 不允许）",
+    "type": "int",
+    "default": 0
+  },
+  "dm_per_day": {
+    "description": "发私信每日上限（0 = 不允许）",
+    "type": "int",
+    "default": 0
+  },
+  "publish_per_day": {
+    "description": "投稿每日上限（0 = 不允许）",
+    "type": "int",
+    "default": 0
+  },
+  "dm_allow_targets": {
+    "description": "私信/转发的收件人白名单（逗号分隔的完整昵称）；留空 = 不限制，强烈建议填写",
+    "type": "string",
+    "default": ""
+  },
   "writes_enabled": {
-    "description": "写操作总闸（本版本不提供任何写工具，仅为将来扩展保留；默认必须关闭）",
+    "description": "写操作总闸。⚠️ 打开后配合 write_actions / 每日额度 / 白名单才会真正执行；建议先保持关闭",
     "type": "bool",
     "default": false
   },
   "allow_send_targets": {
-    "description": "写操作目标白名单（逗号分隔；本版本不提供任何写工具）",
+    "description": "（已弃用，保留以兼容旧配置）请改用 dm_allow_targets",
     "type": "string",
     "default": ""
   }

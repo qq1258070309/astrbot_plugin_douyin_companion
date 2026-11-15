@@ -32,7 +32,11 @@ ALLOWED = {
     "douyin_core/gate.py", "douyin_core/maintenance.py", "douyin_core/media.py",
     "douyin_core/normalize.py", "douyin_core/redact.py", "douyin_core/store.py",
     "douyin_core/understanding.py",
+    # 0.3.0：账号侧浏览器能力（vendored 内核 + 适配层 + 写操作策略）
+    "douyin_core/browser_driver.py", "douyin_core/browser_service.py",
+    "douyin_core/action_policy.py",
     "tests/test_offline.py", "tools/dy_query_adapter.py",
+    "tools/vendor_browser_driver.py",
 }
 
 

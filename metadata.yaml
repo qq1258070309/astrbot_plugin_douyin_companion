@@ -1,38 +1,52 @@
 name: astrbot_plugin_douyin_companion
 display_name: 抖音陪伴 · 共同经历
-short_desc: 抖音热榜/搜索/视频理解，作为陪伴小屋的只读能力与外部记忆 Provider。
+short_desc: 抖音只读能力 + 推荐流/评论/私信/点赞/转发/投稿（受写闸门约束），可接入陪伴小屋记忆。
 author: qq1258070309
-version: 0.2.0
+version: 0.3.0
 repo: https://github.com/qq1258070309/astrbot_plugin_douyin_companion
 license: MIT
 desc: >-
-  将 dsh-douyin（DeepSeek Harness 插件，MIT）的只读抖音能力改编为 AstrBot 插件，
-  并参考 kdcadmin/dsh_douyin_tools 增强为 8 个 LLM 工具：热榜、搜索、视频详情、
-  抽帧、热点视频、视频理解证据链（抽帧+可选 ASR+回放）、显式记忆写入。
-  单 worker 限频、结构化错误码、凭证脱敏、缺失即 null、依赖矩阵自检、有界 dry-run 清理；
-  通过陪伴小屋官方 extension_api (companion.external-memory.v1) 接入记忆召回。
-  不提供任何抖音写操作。仓库带上游哨兵与自动发版工作流。
+  把 dsh-douyin（MIT）的只读抖音能力与 kdcadmin/dsh_douyin_tools 的浏览器内核
+  改编为 AstrBot 插件：热榜、搜索、视频详情、抽帧、视频理解证据链（抽帧+可选 ASR）、
+  推荐流、评论读取、私信收件箱，以及受闸门约束的点赞/评论/转发/私信/投稿。
+  浏览器层复用上游实测选择器（XHR 取证 + 操作后二次核对），失败如实返回 unknown，
+  不伪造成功；写操作默认 dry-run，需总闸+动作白名单+每日额度+收件人白名单四重放行。
+  单 worker 限频、结构化错误码、凭证脱敏、缺失即 null；通过陪伴小屋官方
+  extension_api (companion.external-memory.v1) 接入记忆召回。仓库带上游哨兵与自动发版。
 help: |
   私聊 / 群聊指令：
   - 抖音 <aweme_id 或分享链接>   解析视频详情（可选抽帧）
   - 抖音热榜 [条数]              读取抖音热榜
   - 抖音搜索 <关键词> [条数]     按关键词搜索视频
-  - 抖音状态 / 抖音自检 / 抖音能力 / 抖音写权限
+  - 抖音推荐 [条数]              刷首页推荐流（不搜索）
+  - 抖音评论 <链接> [条数]       读取评论
+  - 抖音私信 [昵称] [条数]       读取私信收件箱（默认仅私聊）
+  - 抖音点赞 <链接> [取消]       点赞 / 取消点赞
+  - 抖音发评论 <链接> <正文>     发评论（可配 comment_mention 真人 @）
+  - 抖音转发 <链接> <昵称>       转发视频给好友
+  - 抖音发私信 <昵称> <正文>     发私信（默认仅私聊）
+  - 抖音投稿 <绝对路径> [标题] [--publish]   默认只存草稿
+  - 抖音登录                     打开浏览器登录页（扫码）
+  - 抖音状态 [登录] / 抖音自检 / 抖音能力 / 抖音写权限
   - 抖音清理 [confirm]（默认 dry-run）
   - 抖音理解 <链接> [帧数] / 抖音记忆 <内容> [标签]
 
-  模型可调用工具（需开启 enable_llm_tools）：
+  模型可调用工具（需开启 enable_llm_tools，共 16 个）：
   douyin_hot / douyin_search / douyin_video / douyin_frames /
-  douyin_hot_videos / douyin_understand / douyin_replay / douyin_remember
+  douyin_hot_videos / douyin_understand / douyin_replay / douyin_remember /
+  douyin_feed / douyin_comments / douyin_inbox /
+  douyin_like / douyin_comment / douyin_share / douyin_dm / douyin_publish
 
-  配置请在 WebUI「插件 → 抖音陪伴」完成；登录 Cookie（Playwright storage_state）
-  需在有显示器的电脑上导出后放到插件数据目录，切勿把 cookie 写进消息或日志。
+  写操作默认全部关闭：需 enable_browser + writes_enabled + write_actions +
+  各动作每日额度；write_dry_run 默认开启，先演练再真跑。
+  登录态在插件数据目录 browser_home 下，切勿把 cookie 写进消息或日志。
 category: 工具
 tags:
   - 抖音
+  - 推荐流
+  - 私信
   - 视频理解
   - 陪伴小屋
-  - 只读
 support_platforms:
   - aiocqhttp
   - qq_official

@@ -73,13 +73,19 @@ jobs:
 
             ## 首次配置
 
-            1. 独立 venv 安装 `dy-cli==0.2.2` 与 `aiohttp`，把 `python_path` 指向该解释器；
-            2. 在有显示器的电脑导出抖音 Playwright `storage_state` 作为 `cookie_file`；
+            1. **读路径**：独立 venv 安装 `dy-cli==0.2.2` 与 `aiohttp`，把 `python_path` 指向该解释器；
+            2. **账号侧**：AstrBot 环境执行 `pip install playwright>=1.45`（只装包，不下载浏览器），
+               打开 `enable_browser`，发 `/抖音登录` 扫码；`/抖音状态 登录` 复查；
             3. WebUI 保存一次插件配置，发 `/抖音状态` 与 `/抖音自检` 自检。
 
-            ## 说明
+            ## 能力与安全
 
-            - 只读插件，**不提供任何抖音写操作**（不代发私信/评论/发布）。
-            - 使用非官方接口，仅供个人学习研究；遇风控请人工处理，不要硬刷。
-            - 许可 MIT，上游归属见 `NOTICE.md` / `LICENSE-UPSTREAM`。
-            - 上游能力对照见 `docs/UPSTREAM_MAPPING.md`。
+            - 只读：热榜 / 搜索 / 详情 / 抽帧 / 视频理解 / 推荐流 / 评论 / 私信收件箱。
+            - 写（**默认全部关闭**）：点赞 / 发评论 / 转发 / 发私信 / 投稿。
+            - 写操作需同时满足：`enable_browser` + `writes_enabled` + `write_actions` + 每日额度；
+              私信/转发还需收件人白名单，投稿需 `publish_allow_dir`；`write_dry_run` 默认开启。
+              模型调用必须 `confirm=true`，没有 `force` 后门。
+            - 评论 / 私信请保持 `browser_headless=false`（无头模式拿不到完整评论区）。
+            - 使用非官方接口与页面自动化，仅供个人学习研究；遇风控请人工处理，不要硬刷。
+            - 许可 MIT，上游归属见 `NOTICE.md` / `LICENSE-UPSTREAM`；
+              上游能力对照见 `docs/UPSTREAM_MAPPING.md`。

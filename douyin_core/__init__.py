@@ -14,6 +14,10 @@ from .redact import redact, redact_text, strip_ansi
 from .store import DouyinStore, identity_key
 from .understanding import UnderstandingService, doctor as understanding_doctor
 from .maintenance import CAPABILITIES, MaintenanceService
+from .action_policy import (
+    ACTION_LABELS, WRITE_ACTIONS, ActionPolicy, Decision, day_start_ts,
+)
+from .browser_service import BrowserService, BrowserUnavailable
 
 __all__ = [
     "DouyinError", "map_error_text", "normalize_code",
@@ -23,4 +27,6 @@ __all__ = [
     "normalize_search_payload", "normalize_stats", "normalize_user", "video_url",
     "redact", "redact_text", "strip_ansi", "DouyinStore", "identity_key",
     "UnderstandingService", "understanding_doctor", "MaintenanceService", "CAPABILITIES",
+    "ActionPolicy", "Decision", "WRITE_ACTIONS", "ACTION_LABELS", "day_start_ts",
+    "BrowserService", "BrowserUnavailable",
 ]

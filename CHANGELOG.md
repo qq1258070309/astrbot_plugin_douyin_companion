@@ -2,6 +2,58 @@
 
 本文件记录 `astrbot_plugin_douyin_companion` 的版本变化。版本号遵循语义化版本规范。
 
+## 0.3.0
+
+接上**账号侧能力**：推荐流、评论、私信收件箱、点赞、发评论、转发、发私信、投稿。
+浏览器层 **vendored** 上游 `kdcadmin/dsh_douyin_tools` 的 Playwright 内核
+（MIT / TiAmoSS），只剥离 MCP 脚手架，选择器与取证逻辑一字未改。
+
+### 新增：浏览器内核与适配层
+
+- `douyin_core/browser_driver.py`：vendored 内核（4700+ 行）。
+  用 `tools/vendor_browser_driver.py --check` 可与上游比对，防手改。
+- `douyin_core/browser_service.py`：配置注入 → 会话生命周期 → 统一返回形状 → 脱敏。
+  写不写由策略层决定，适配层不判断。
+- `douyin_core/action_policy.py`：写操作策略，四重闸门 + 每日额度 + 收件人白名单 +
+  投稿目录白名单 + 默认演练 + 模型必须 `confirm=true`。**取消上游的 `force` 后门**。
+- `DouyinStore` 新增 `dm_messages` / `action_ledger` 两张表：
+  私信幂等落库（拒绝 DOM 伪造 ID）、写操作记账（只统计 live）。
+
+### 新增：能力（8 个 LLM 工具 / 9 条指令）
+
+| 能力 | 指令 | 工具 |
+| --- | --- | --- |
+| 推荐流（`/module/feed/` XHR + 滚动） | `/抖音推荐` | `douyin_feed` |
+| 评论读取（XHR 优先，DOM 兜底） | `/抖音评论` | `douyin_comments` |
+| 私信收件箱（只返回有 ID 的入站消息） | `/抖音私信` | `douyin_inbox` |
+| 点赞 / 取消 | `/抖音点赞` | `douyin_like` |
+| 发评论（真人 @ 联想面板） | `/抖音发评论` | `douyin_comment` |
+| 转发给好友 | `/抖音转发` | `douyin_share` |
+| 发私信 | `/抖音发私信` | `douyin_dm` |
+| 投稿（默认草稿 + AI 声明） | `/抖音投稿` | `douyin_publish` |
+| 打开登录页 | `/抖音登录` | — |
+
+- 写操作会在操作后二次取证（`data-e2e-state` 翻转 / `/comment/publish` 回执 /
+  新增出站气泡 / 草稿或作品 ID）；**取不到证据返回 `status=unknown`，不自动重发、不谎报成功**。
+- 私信读取默认只在私聊可用（`dm_private_only`），避免群聊泄露。
+
+### 变更
+
+- `metadata.yaml` 版本 `0.3.0`，描述与帮助改为 16 工具 / 19 指令。
+- `requirements.txt` 增加 `playwright>=1.45`（只装包，不下载浏览器，驱动本机 Chrome/Edge）。
+- `writes_enabled` 语义变化：不再是"保留字段"，而是真实总闸；新增 20 个配置项。
+- `allow_send_targets` 标记弃用，改用 `dm_allow_targets`（旧值仍兼容）。
+- `tools/upstream_diff.py` 的 34 项映射更新：8 项从 `not_ported` 变为 `implemented`（带闸门说明）。
+- `docs/UPSTREAM_MAPPING.md` 重新生成。
+- 单测从 26 个增加到 43 个（写策略矩阵 / 私信去重 / vendored 内核完整性）。
+
+### 安全
+
+- 写操作**默认全关**：`enable_browser=false`、`writes_enabled=false`、`write_actions` 空、
+  各额度为 0、`write_dry_run=true`。要真跑需逐项显式打开。
+- 所有 live 操作落本地账本，`/抖音写权限` 可查今日用量。
+- 未新增任何外部端口；登录态只存在插件数据目录 `browser_home/`。
+
 ## 0.2.0
 
 以 [`kdcadmin/dsh_douyin_tools`](https://github.com/kdcadmin/dsh_douyin_tools)

@@ -1,6 +1,11 @@
 # AstrBot 官方禁止在插件里使用 requests；媒体请求一律走 aiohttp（AstrBot 4.29 已自带 aiohttp）。
 aiohttp>=3.9,<4
 
+# 账号侧能力（推荐流 / 评论 / 私信 / 点赞 / 转发 / 投稿）用 Playwright 驱动**本机已装的**
+# Chrome / Edge。只需 pip 安装本包，不需要执行 `playwright install`（不下载浏览器）。
+# 只读路径（热榜/搜索/详情）不依赖它：没装也能正常工作。
+playwright>=1.45
+
 # dy-cli 是「读路径」的实际实现方（热榜 / 搜索 / 详情 / 用户主页），
 # 它负责 X-Bogus 签名、Cookie 与风控细节，本插件不重写。
 # 推荐装在 python_path 指向的独立 venv 里，避免与 AstrBot 宿主环境互相污染：

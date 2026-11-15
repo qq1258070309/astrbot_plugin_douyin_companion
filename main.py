@@ -23,8 +23,12 @@ from astrbot.api.event import AstrMessageEvent, MessageEventResult, filter
 from astrbot.api.star import Context, Star, StarTools
 
 from .douyin_core import (
+    ACTION_LABELS,
+    WRITE_ACTIONS,
+    ActionPolicy,
     DouyinError,
     AsyncRateGate,
+    BrowserService,
     GateConfig,
     WriteGate,
     clamp,
@@ -103,6 +107,46 @@ class DouyinCompanionPlugin(Star):
             allow_targets=tuple(str(self.config.get("allow_send_targets") or "").split(",")),
         )
 
+        # ------------------------------------------------ 浏览器（账号侧能力） --
+        self.browser = BrowserService(
+            data_dir=self._data_dir,
+            headless=bool(self.config.get("browser_headless", False)),
+            channel=str(self.config.get("browser_channel") or "auto"),
+            cdp_url=str(self.config.get("browser_cdp_url") or ""),
+            chrome_path=str(self.config.get("browser_chrome_path") or ""),
+            profile_port=clamp(self.config.get("browser_profile_port"), 1024, 65535, 9333),
+            default_timeout=clamp(self.config.get("browser_timeout"), 30, 600, 90),
+        )
+        targets_raw = str(
+            self.config.get("dm_allow_targets")
+            or self.config.get("allow_send_targets")
+            or ""
+        )
+        quotas = {
+            "like": clamp(self.config.get("like_per_day"), 0, 500, 0),
+            "comment": clamp(self.config.get("comment_per_day"), 0, 200, 0),
+            "share": clamp(self.config.get("share_per_day"), 0, 200, 0),
+            "dm": clamp(self.config.get("dm_per_day"), 0, 200, 0),
+            "publish": clamp(self.config.get("publish_per_day"), 0, 50, 0),
+        }
+        self.policy = ActionPolicy(
+            writes_enabled=bool(self.config.get("writes_enabled", False)),
+            dry_run=bool(self.config.get("write_dry_run", True)),
+            actions=tuple(
+                a.strip() for a in str(self.config.get("write_actions") or "").split(",")
+                if a.strip() in WRITE_ACTIONS
+            ),
+            quotas=quotas,
+            targets=tuple(targets_raw.split(",")),
+            publish_dir=str(self.config.get("publish_allow_dir") or ""),
+            require_confirm=True,
+            store=self.store,
+        )
+        self.enable_browser = bool(self.config.get("enable_browser", False))
+        self.dm_private_only = bool(self.config.get("dm_private_only", True))
+        self.feed_max_scrolls = clamp(self.config.get("feed_max_scrolls"), 1, 30, 6)
+        self.comment_mention = str(self.config.get("comment_mention") or "").strip().lstrip("@")
+
         self.enabled = bool(self.config.get("enabled", True))
         self.enable_llm_tools = bool(self.config.get("enable_llm_tools", True))
         self.enable_memory_provider = bool(self.config.get("enable_memory_provider", True))
@@ -120,6 +164,13 @@ class DouyinCompanionPlugin(Star):
         if not probe.get("ok"):
             logger.warning("[DouyinCompanion] dy-cli 未就绪，只读能力将返回 backend_unavailable：%s",
                            redact_text(probe.get("error")))
+        if self.enable_browser:
+            info = self.browser.probe()
+            if info.get("ok"):
+                logger.info("[DouyinCompanion] 浏览器内核就绪：channel=%s headless=%s profile=%s",
+                            info.get("browser_channel"), info.get("headless"), info.get("profile_dir"))
+            else:
+                logger.warning("[DouyinCompanion] 浏览器内核不可用：%s", info.get("error"))
 
     @filter.on_astrbot_loaded()
     async def _on_host_loaded(self) -> None:
@@ -135,6 +186,10 @@ class DouyinCompanionPlugin(Star):
             await self.media.close()
         except Exception:
             logger.warning("[DouyinCompanion] 媒体会话关闭失败", exc_info=True)
+        try:
+            await self.browser.close()
+        except Exception:
+            logger.warning("[DouyinCompanion] 浏览器关闭失败", exc_info=True)
         await self.backend.close()
         self.store.close()
 
@@ -292,8 +347,8 @@ class DouyinCompanionPlugin(Star):
 
     # ================================================================== 指令
     @filter.command("抖音状态", alias={"dystatus"})
-    async def cmd_status(self, event: AstrMessageEvent):
-        """查看抖音后端、登录态、配额与陪伴小屋接入状态。"""
+    async def cmd_status(self, event: AstrMessageEvent, what: str = ""):
+        """查看抖音后端、登录态、配额与陪伴小屋接入状态。加「登录」会实际探测登录态。"""
         status = await self.backend.status()
         linked = self._registration is not None
         lines = [
@@ -302,22 +357,40 @@ class DouyinCompanionPlugin(Star):
             f"dy-cli：{'就绪 ' + str(status['backend']['dy_cli'].get('version', '')) if status['backend']['dy_cli'].get('ok') else '未就绪'}",
             f"本小时请求：{status['quota']['used']}/{status['quota']['limit']}，剩余 {status['quota']['remaining']}",
             f"陪伴小屋记忆接入：{'已连接' if linked else '未连接（独立模式仍可用）'}",
-            f"写能力：{self.write_gate.describe()['default']}（随包写工具 0 个）",
         ]
+        if self.enable_browser:
+            info = self.browser.probe()
+            lines.append(
+                "浏览器：" + ("就绪" if info.get("ok") else f"不可用（{info.get('error')}）")
+                + f"；channel={info.get('browser_channel') or '?'}；"
+                f"{'无头' if info.get('headless') else '带界面'}"
+            )
+            if "登录" in str(what or ""):
+                state = await self.browser.login_state()
+                if state.get("ok"):
+                    lines.append(
+                        "登录态：" + ("已登录" if state.get("loggedIn") else "未登录")
+                        + f"；cookie={bool(state.get('cookie'))}；头像={bool(state.get('avatar'))}"
+                        + (f"；昵称={state.get('nickname')}" if state.get("nickname") else "")
+                    )
+                else:
+                    lines.append(f"登录态探测失败：{state.get('error')}")
+        else:
+            lines.append("浏览器：未启用（enable_browser=false，点赞/评论/私信/投稿不可用）")
+        gate = self.policy.describe()
+        lines.append(
+            f"写能力：总闸={'开' if gate['writes_enabled'] else '关'}，"
+            f"演练={'开' if gate['dry_run'] else '关'}；"
+            f"开启动作={[a for a, on in gate['actions'].items() if on] or '无'}"
+        )
         if status["problems"]:
             lines.append("提示：" + "；".join(status["problems"]))
         yield event.plain_result("\n".join(lines))
 
     @filter.command("抖音写权限", alias={"douyin_write_gate"})
     async def cmd_write_gate(self, event: AstrMessageEvent):
-        """查看写操作三道闸的当前状态（本插件不提供任何真实写工具）。"""
-        info = self.write_gate.describe()
-        allowed, reason = self.write_gate.evaluate("", explicit_confirm=False)
-        yield event.plain_result(
-            f"总闸 writes_enabled={info['writes_enabled']}；"
-            f"白名单条目={info['target_count']}；随包写工具={info['shipped_write_tools']}；"
-            f"默认调用结果={reason}（dry-run）。"
-        )
+        """查看写操作闸门矩阵（总闸 / 动作 / 每日额度 / 收件人白名单）。"""
+        yield event.plain_result("写操作闸门：\n" + "\n".join(self.policy.summary_lines()))
 
     @filter.command("抖音热榜", alias={"dyhot"})
     async def cmd_hot(self, event: AstrMessageEvent, count: int = 10):
@@ -482,6 +555,323 @@ class DouyinCompanionPlugin(Star):
             return
         memory_id = self.store.remember(self._event_key(event), text, tag=str(tag))
         yield event.plain_result(f"已记住（{memory_id}）：{text[:80]}")
+
+    # ==================================================== 账号侧：浏览器能力
+    def _command_args(self, event: AstrMessageEvent, *names: str) -> str:
+        """取指令后面的原始文本。
+
+        AstrBot 的指令参数按空格切分，评论/私信正文含空格会被截断，所以这里自己解析。
+        兼容两种情形：``message_str`` 仍带指令前缀，或框架已把前缀剥掉。
+        """
+        text = str(getattr(event, "message_str", "") or "").strip()
+        for name in sorted(names, key=len, reverse=True):
+            for prefix in (f"/{name}", name):
+                if text.startswith(prefix):
+                    return text[len(prefix):].strip()
+        return text
+
+    @staticmethod
+    def _split_target_text(rest: str) -> tuple[str, str]:
+        """``<目标> <正文>``；目标可用双引号包住以容纳空格。"""
+        rest = str(rest or "").strip()
+        if rest.startswith('"'):
+            end = rest.find('"', 1)
+            if end > 0:
+                return rest[1:end].strip(), rest[end + 1:].strip()
+        parts = rest.split(None, 1)
+        return (parts[0], parts[1].strip() if len(parts) > 1 else "")
+
+    async def _browser_ready(self) -> str:
+        if not self.enabled:
+            return "插件已停用。"
+        if not self.enable_browser:
+            return ("浏览器能力未启用：请在插件配置里打开 enable_browser，"
+                    "并在 AstrBot 的 Python 环境安装 playwright（pip install playwright）。")
+        info = self.browser.probe()
+        if not info.get("ok"):
+            return f"浏览器不可用：{info.get('error')}。{info.get('detail') or ''}".strip()
+        return ""
+
+    @staticmethod
+    def _need_login_hint(result: dict[str, Any]) -> str:
+        if result.get("needLogin") or "登录" in str(result.get("error") or ""):
+            return "\n登录态不足：先 /抖音登录 在浏览器窗口里扫码，再用 /抖音状态 复查。"
+        return ""
+
+    def _action_gate(self, action: str, target: str = "", *, confirm: bool = True):
+        """返回 (decision, 回复文本)。指令由人触发，视为已确认。"""
+        decision = self.policy.check(action, target, confirm=confirm)
+        if decision.mode == "blocked":
+            return decision, f"⛔ {decision.message()}\n用 /抖音写权限 查看闸门状态。"
+        if decision.mode == "dry_run":
+            return decision, (f"🧪 {decision.message()}\n"
+                              f"动作：{ACTION_LABELS[action]}；目标：{target or '（见参数）'}\n"
+                              "未对账号做任何操作。要真跑：关掉 write_dry_run 并打开 writes_enabled。")
+        return decision, ""
+
+    @filter.command("抖音推荐", alias={"dyfeed"})
+    async def cmd_feed(self, event: AstrMessageEvent, count: int = 10):
+        """刷抖音推荐流（不搜索），返回露出的视频。"""
+        blocked = await self._browser_ready()
+        if blocked:
+            yield event.plain_result(blocked)
+            return
+        num = clamp(count, 1, 30, 10)
+        result = await self.browser.feed(num, self.feed_max_scrolls)
+        if not result.get("ok"):
+            yield event.plain_result(f"推荐流读取失败：{result.get('error')}{self._need_login_hint(result)}")
+            return
+        items = result.get("items") or []
+        lines = [f"推荐流 {len(items)} 条（页面自身 XHR，不是搜索）"]
+        for i, item in enumerate(items, 1):
+            lines.append(
+                f"{i}. {item.get('title') or '(无文案)'} · @{item.get('author') or '?'} "
+                f"· 赞 {item.get('digg') or 0}\n   {item.get('url')}"
+            )
+        for note in result.get("notes") or []:
+            lines.append(f"· {note}")
+        if not items:
+            lines.append("没有抓到视频：可能未登录、被风控，或首页结构变了。")
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("抖音评论", alias={"dycomments"})
+    async def cmd_comments(self, event: AstrMessageEvent, target: str = "", count: int = 30):
+        """读取一条视频的评论（只读）。"""
+        blocked = await self._browser_ready()
+        if blocked:
+            yield event.plain_result(blocked)
+            return
+        if not str(target or "").strip():
+            yield event.plain_result("用法：/抖音评论 <视频链接或ID> [条数]")
+            return
+        num = clamp(count, 1, 100, 30)
+        result = await self.browser.comments(target, num)
+        if not result.get("ok"):
+            yield event.plain_result(f"评论读取失败：{result.get('error')}{self._need_login_hint(result)}")
+            return
+        items = result.get("items") or result.get("comments") or []
+        lines = [f"评论 {len(items)} 条（{result.get('total') or '?'} 总数）"]
+        for i, item in enumerate(items[:num], 1):
+            text = str(item.get("text") or "").replace("\n", " ")[:120]
+            lines.append(f"{i}. @{item.get('nickname') or item.get('author') or '?'}：{text}"
+                         f"（赞 {item.get('digg_count') or item.get('likes') or 0}）")
+        if not items:
+            lines.append("没有读到评论：可能要登录，或这条作品关闭了评论。")
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("抖音私信", alias={"dyinbox"})
+    async def cmd_inbox(self, event: AstrMessageEvent, nickname: str = "", count: int = 12):
+        """读取私信收件箱（只读；默认只在私聊里可用）。"""
+        blocked = await self._browser_ready()
+        if blocked:
+            yield event.plain_result(blocked)
+            return
+        if self.dm_private_only and event.get_group_id():
+            yield event.plain_result("私信内容默认只在私聊里展示（dm_private_only=true），避免在群里泄露。")
+            return
+        num = clamp(count, 1, 12, 12)
+        result = await self.browser.inbox(str(nickname or "").strip(), num)
+        if not result.get("ok"):
+            yield event.plain_result(f"私信读取失败：{result.get('error')}{self._need_login_hint(result)}")
+            return
+        items = result.get("items") or []
+        key = self._event_key(event)
+        stored = 0
+        for item in items:
+            if self.store.put_dm(key, str(item.get("name") or ""), item):
+                stored += 1
+        lines = [f"私信 {len(items)} 条（新入库 {stored} 条）"]
+        for item in items:
+            when = str(item.get("at") or "")
+            lines.append(
+                f"· {item.get('name') or item.get('conversationId') or '?'}"
+                f"（{item.get('kind') or 'text'}）：{str(item.get('text') or '')[:100]}"
+                + (f" [{when}]" if when else "")
+            )
+        if not items:
+            lines.append("没有「有明确消息 ID 且方向为入站」的消息；预览文字不算消息。")
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("抖音点赞", alias={"dylike"})
+    async def cmd_like(self, event: AstrMessageEvent, target: str = "", undo: str = ""):
+        """给视频点赞 / 取消点赞（受写策略约束）。"""
+        blocked = await self._browser_ready()
+        if blocked:
+            yield event.plain_result(blocked)
+            return
+        target = str(target or "").strip()
+        if not target:
+            yield event.plain_result("用法：/抖音点赞 <视频链接或ID> [取消]")
+            return
+        is_undo = str(undo or "").strip() in ("取消", "undo", "取消点赞")
+        decision, refusal = self._action_gate("like", target)
+        if refusal:
+            yield event.plain_result(refusal)
+            return
+        result = await self.browser.like(target, is_undo)
+        self.policy.record(decision, ok=bool(result.get("ok")), detail=str(result.get("error") or ""))
+        if not result.get("ok"):
+            yield event.plain_result(f"点赞失败：{result.get('error')}{self._need_login_hint(result)}")
+            return
+        state = "已取消" if is_undo else "已点赞"
+        if result.get("changed") is False:
+            state = "本来就是目标状态，没有重复点"
+        yield event.plain_result(
+            f"{state}：{result.get('aweme_id') or target}\n"
+            f"页面状态={result.get('state') or '?'} 已核对={bool(result.get('verified'))}"
+            + (f"\n{result.get('note')}" if result.get("note") else "")
+        )
+
+    @filter.command("抖音发评论", alias={"dycomment"})
+    async def cmd_comment(self, event: AstrMessageEvent, target: str = "", text: str = ""):
+        """在视频下发评论（受写策略约束）。"""
+        blocked = await self._browser_ready()
+        if blocked:
+            yield event.plain_result(blocked)
+            return
+        rest = self._command_args(event, "抖音发评论", "dycomment")
+        target, text = self._split_target_text(rest)
+        if not target or not text:
+            yield event.plain_result("用法：/抖音发评论 <视频链接或ID> <评论正文>")
+            return
+        decision, refusal = self._action_gate("comment", target)
+        if refusal:
+            yield event.plain_result(refusal)
+            return
+        result = await self.browser.comment(target, text, mention=self.comment_mention)
+        self.policy.record(decision, ok=bool(result.get("ok")), detail=str(result.get("error") or ""))
+        if not result.get("ok"):
+            status = result.get("status") or ""
+            yield event.plain_result(
+                f"评论未确认成功：{result.get('error')}"
+                + (f"（status={status}，已提交的操作不会自动重发）" if status == "unknown" else "")
+                + self._need_login_hint(result)
+            )
+            return
+        yield event.plain_result(
+            f"评论已发：{result.get('cid') or '(无 CID)'}\n"
+            f"取证方式={result.get('evidence') or '?'}；正文={result.get('text') or text}"
+        )
+
+    @filter.command("抖音转发", alias={"dyshare"})
+    async def cmd_share(self, event: AstrMessageEvent, target: str = "", nickname: str = ""):
+        """把视频转发给指定好友（受收件人白名单约束）。"""
+        blocked = await self._browser_ready()
+        if blocked:
+            yield event.plain_result(blocked)
+            return
+        rest = self._command_args(event, "抖音转发", "dyshare")
+        target, nickname = self._split_target_text(rest)
+        if not target or not nickname:
+            yield event.plain_result("用法：/抖音转发 <视频链接或ID> <好友完整昵称>")
+            return
+        decision, refusal = self._action_gate("share", nickname)
+        if refusal:
+            yield event.plain_result(refusal)
+            return
+        result = await self.browser.share(target, nickname)
+        self.policy.record(decision, ok=bool(result.get("ok")), detail=str(result.get("error") or ""))
+        if not result.get("ok"):
+            yield event.plain_result(f"转发失败：{result.get('error')}{self._need_login_hint(result)}")
+            return
+        yield event.plain_result(
+            f"已转发给 {nickname}：{result.get('aweme_id') or target}\n"
+            f"取证={result.get('evidence') or '?'}；已核对={bool(result.get('verified'))}"
+            + (f"\n{result.get('note')}" if result.get("note") else "")
+        )
+
+    @filter.command("抖音发私信", alias={"dydm"})
+    async def cmd_dm(self, event: AstrMessageEvent, nickname: str = "", text: str = ""):
+        """给指定好友发私信（受白名单 + 每日额度约束）。"""
+        blocked = await self._browser_ready()
+        if blocked:
+            yield event.plain_result(blocked)
+            return
+        if self.dm_private_only and event.get_group_id():
+            yield event.plain_result("发私信默认只在私聊里允许（dm_private_only=true）。")
+            return
+        rest = self._command_args(event, "抖音发私信", "dydm")
+        nickname, text = self._split_target_text(rest)
+        if not nickname or not text:
+            yield event.plain_result("用法：/抖音发私信 <好友完整昵称> <正文>")
+            return
+        decision, refusal = self._action_gate("dm", nickname)
+        if refusal:
+            yield event.plain_result(refusal)
+            return
+        result = await self.browser.dm_send(nickname, text)
+        self.policy.record(decision, ok=bool(result.get("ok")), detail=str(result.get("error") or ""))
+        if not result.get("ok"):
+            yield event.plain_result(f"私信未确认成功：{result.get('error')}{self._need_login_hint(result)}")
+            return
+        yield event.plain_result(
+            f"私信已发：{nickname}，消息 ID={result.get('messageId') or '?'}，"
+            f"取证={result.get('evidence') or '?'}"
+        )
+
+    @filter.command("抖音投稿", alias={"dypublish"})
+    async def cmd_publish(self, event: AstrMessageEvent, path: str = "", title: str = ""):
+        """投稿视频（默认只存草稿；受允许目录约束）。"""
+        blocked = await self._browser_ready()
+        if blocked:
+            yield event.plain_result(blocked)
+            return
+        rest = self._command_args(event, "抖音投稿", "dypublish")
+        if rest.startswith('"'):
+            path, tail = self._split_target_text(rest)
+        else:
+            parts = rest.split(None, 1)
+            path, tail = (parts[0] if parts else ""), (parts[1] if len(parts) > 1 else "")
+        really = "--publish" in tail
+        tail = tail.replace("--publish", "").strip()
+        title = tail or title
+        if not path:
+            yield event.plain_result(
+                "用法：/抖音投稿 <视频绝对路径> [标题] [--publish]\n"
+                "默认只存草稿（暂存离开）；--publish 才会真正发布，且必须已配置 publish_allow_dir。"
+            )
+            return
+        ok, reason = self.policy.check_publish_path(path)
+        if not ok:
+            yield event.plain_result(f"⛔ 投稿被拒：{reason}")
+            return
+        decision, refusal = self._action_gate("publish", path)
+        if refusal:
+            yield event.plain_result(refusal)
+            return
+        result = await self.browser.publish(
+            path, title or f"日常 {time.strftime('%Y-%m-%d')}",
+            tags=str(self.config.get("publish_tags") or ""),
+            draft=not really, ai_declare=True,
+        )
+        self.policy.record(decision, ok=bool(result.get("ok")), detail=str(result.get("error") or ""))
+        if not result.get("ok"):
+            yield event.plain_result(f"投稿失败：{result.get('error')}{self._need_login_hint(result)}")
+            return
+        ident = result.get("platformId") or result.get("draftId") or result.get("aweme_id") or "?"
+        yield event.plain_result(
+            f"{'已发布' if really else '已存草稿'}：{ident}\n"
+            f"已核对={bool(result.get('verified'))}；取证={result.get('evidence') or '?'}"
+            + (f"\n{result.get('url')}" if result.get("url") else "")
+            + ("\n" + "；".join(result.get("notes") or []) if result.get("notes") else "")
+        )
+
+    @filter.command("抖音登录", alias={"dylogin"})
+    async def cmd_login(self, event: AstrMessageEvent):
+        """打开浏览器登录页，由本人扫码/短信登录。"""
+        blocked = await self._browser_ready()
+        if blocked:
+            yield event.plain_result(blocked)
+            return
+        result = await self.browser.open_login()
+        if not result.get("ok"):
+            yield event.plain_result(f"打开登录页失败：{result.get('error')}")
+            return
+        yield event.plain_result(
+            "已打开抖音登录页。请在弹出的浏览器窗口里完成扫码或短信登录；"
+            "登录态保存在插件数据目录的 browser_home 里，之后 /抖音状态 可复查。\n"
+            "提示：评论 / 私信需要**带界面**的浏览器（browser_headless=false），无头模式会拿到精简评论区。"
+        )
 
     # ============================================================== LLM 工具
     @filter.llm_tool(name="douyin_hot")
@@ -689,4 +1079,257 @@ class DouyinCompanionPlugin(Star):
             f"证据 {aweme_id}：{evidence['frame_count']} 帧 / "
             f"ASR {evidence['transcript']['status']}\n"
             f"帧：\n" + "\n".join(evidence["frames"][:6])
+        )
+
+    # ------------------------------------------------- 账号侧 LLM 工具（读） --
+    @filter.llm_tool(name="douyin_feed")
+    async def tool_feed(self, event: AstrMessageEvent, num: int = 10,
+                        scrolls: int = 6) -> MessageEventResult:
+        """刷抖音推荐流（首页推荐，不是关键词搜索），返回露出的视频标题/作者/点赞数。
+
+        Args:
+            num(number): 要几条，1 到 30，默认 10
+            scrolls(number): 最多滚几屏，1 到 30，默认 6
+        """
+        blocked = await self._browser_ready()
+        if blocked or not self.enable_llm_tools:
+            yield event.plain_result(blocked or "LLM 工具未启用。")
+            return
+        result = await self.browser.feed(
+            clamp(num, 1, 30, 10), clamp(scrolls, 1, self.feed_max_scrolls, self.feed_max_scrolls)
+        )
+        if not result.get("ok"):
+            yield event.plain_result(f"推荐流读取失败：{result.get('error')}{self._need_login_hint(result)}")
+            return
+        items = result.get("items") or []
+        if not items:
+            yield event.plain_result("推荐流没有抓到视频（可能未登录或被风控），不要编造内容。")
+            return
+        lines = [f"推荐流 {len(items)} 条："]
+        lines += [f"- {i.get('title') or '(无文案)'} | @{i.get('author') or '?'} "
+                  f"| 赞 {i.get('digg') or 0} | {i.get('url')}" for i in items]
+        yield event.plain_result("\n".join(lines))
+
+    @filter.llm_tool(name="douyin_comments")
+    async def tool_comments(self, event: AstrMessageEvent, target: str,
+                            num: int = 30) -> MessageEventResult:
+        """读取一条抖音视频的评论列表（只读）。
+
+        Args:
+            target(string): aweme_id 或抖音视频/分享链接
+            num(number): 取几条，1 到 100，默认 30
+        """
+        blocked = await self._browser_ready()
+        if blocked or not self.enable_llm_tools:
+            yield event.plain_result(blocked or "LLM 工具未启用。")
+            return
+        result = await self.browser.comments(target, clamp(num, 1, 100, 30))
+        if not result.get("ok"):
+            yield event.plain_result(f"评论读取失败：{result.get('error')}{self._need_login_hint(result)}")
+            return
+        items = result.get("items") or result.get("comments") or []
+        if not items:
+            yield event.plain_result("没有读到评论（可能要登录，或该作品关闭了评论）。")
+            return
+        lines = [f"评论 {len(items)} 条："]
+        lines += [f"- @{i.get('nickname') or i.get('author') or '?'}："
+                  f"{str(i.get('text') or '')[:140]}" for i in items[:20]]
+        yield event.plain_result("\n".join(lines))
+
+    @filter.llm_tool(name="douyin_inbox")
+    async def tool_inbox(self, event: AstrMessageEvent, nickname: str = "",
+                         limit: int = 8) -> MessageEventResult:
+        """读取抖音私信收件箱；给 nickname 时只读与这个人的会话。只返回有消息 ID 的入站消息。
+
+        Args:
+            nickname(string): 好友完整昵称；留空则读最近会话
+            limit(number): 最多几个会话，1 到 12，默认 8
+        """
+        blocked = await self._browser_ready()
+        if blocked or not self.enable_llm_tools:
+            yield event.plain_result(blocked or "LLM 工具未启用。")
+            return
+        if self.dm_private_only and event.get_group_id():
+            yield event.plain_result("私信内容不在群里展示（dm_private_only=true）。")
+            return
+        result = await self.browser.inbox(str(nickname or "").strip(), clamp(limit, 1, 12, 8))
+        if not result.get("ok"):
+            yield event.plain_result(f"私信读取失败：{result.get('error')}{self._need_login_hint(result)}")
+            return
+        items = result.get("items") or []
+        key = self._event_key(event)
+        for item in items:
+            self.store.put_dm(key, str(item.get("name") or ""), item)
+        if not items:
+            yield event.plain_result("没有新的入站私信（预览文字不算消息）。")
+            return
+        lines = ["私信（入站）："]
+        lines += [f"- {i.get('name') or '?'}：{str(i.get('text') or '')[:140]}" for i in items]
+        yield event.plain_result("\n".join(lines))
+
+    # ------------------------------------------------- 账号侧 LLM 工具（写） --
+    @filter.llm_tool(name="douyin_like")
+    async def tool_like(self, event: AstrMessageEvent, target: str,
+                        undo: bool = False, confirm: bool = False) -> MessageEventResult:
+        """给抖音视频点赞或取消点赞。默认演练：必须由用户确认后传 confirm=true 才会真执行。
+
+        Args:
+            target(string): aweme_id 或抖音视频/分享链接
+            undo(boolean): true 表示取消点赞
+            confirm(boolean): 用户已明确同意执行，才传 true
+        """
+        blocked = await self._browser_ready()
+        if blocked or not self.enable_llm_tools:
+            yield event.plain_result(blocked or "LLM 工具未启用。")
+            return
+        decision = self.policy.check("like", target, confirm=bool(confirm))
+        if decision.mode != "live":
+            yield event.plain_result(
+                f"{decision.message()}\n把这条告诉用户，等用户明确同意后再以 confirm=true 调用；不要自行重试。"
+            )
+            return
+        result = await self.browser.like(target, bool(undo))
+        self.policy.record(decision, ok=bool(result.get("ok")), detail=str(result.get("error") or ""))
+        if not result.get("ok"):
+            yield event.plain_result(f"点赞失败：{result.get('error')}{self._need_login_hint(result)}")
+            return
+        yield event.plain_result(
+            f"已完成：{'取消点赞' if undo else '点赞'} {result.get('aweme_id') or target}；"
+            f"页面状态={result.get('state') or '?'}；已核对={bool(result.get('verified'))}"
+        )
+
+    @filter.llm_tool(name="douyin_comment")
+    async def tool_comment(self, event: AstrMessageEvent, target: str, text: str,
+                           confirm: bool = False) -> MessageEventResult:
+        """在抖音视频下发评论。默认演练：必须由用户确认后传 confirm=true 才会真执行。
+
+        Args:
+            target(string): aweme_id 或抖音视频/分享链接
+            text(string): 评论正文，短、纯文本，不超过 300 字
+            confirm(boolean): 用户已明确同意发布，才传 true
+        """
+        blocked = await self._browser_ready()
+        if blocked or not self.enable_llm_tools:
+            yield event.plain_result(blocked or "LLM 工具未启用。")
+            return
+        body = str(text or "").strip()
+        if not body:
+            yield event.plain_result("[invalid_args] 评论正文不能为空。")
+            return
+        decision = self.policy.check("comment", target, confirm=bool(confirm))
+        if decision.mode != "live":
+            yield event.plain_result(
+                f"{decision.message()}\n将要发布的内容：{body[:120]}\n"
+                "先让用户确认这段文字，再以 confirm=true 调用；不要自行重试或改写。"
+            )
+            return
+        result = await self.browser.comment(target, body, mention=self.comment_mention)
+        self.policy.record(decision, ok=bool(result.get("ok")), detail=str(result.get("error") or ""))
+        if not result.get("ok"):
+            yield event.plain_result(f"评论未确认成功：{result.get('error')}{self._need_login_hint(result)}")
+            return
+        yield event.plain_result(
+            f"评论已发：cid={result.get('cid') or '?'}；取证={result.get('evidence') or '?'}"
+        )
+
+    @filter.llm_tool(name="douyin_share")
+    async def tool_share(self, event: AstrMessageEvent, target: str, nickname: str,
+                         confirm: bool = False) -> MessageEventResult:
+        """把抖音视频转发给指定好友。默认演练：必须由用户确认后传 confirm=true。
+
+        Args:
+            target(string): aweme_id 或抖音视频/分享链接
+            nickname(string): 好友完整昵称（不支持模糊匹配）
+            confirm(boolean): 用户已明确同意转发，才传 true
+        """
+        blocked = await self._browser_ready()
+        if blocked or not self.enable_llm_tools:
+            yield event.plain_result(blocked or "LLM 工具未启用。")
+            return
+        decision = self.policy.check("share", nickname, confirm=bool(confirm))
+        if decision.mode != "live":
+            yield event.plain_result(f"{decision.message()}\n把这条告诉用户，等确认后以 confirm=true 调用。")
+            return
+        result = await self.browser.share(target, nickname)
+        self.policy.record(decision, ok=bool(result.get("ok")), detail=str(result.get("error") or ""))
+        if not result.get("ok"):
+            yield event.plain_result(f"转发失败：{result.get('error')}{self._need_login_hint(result)}")
+            return
+        yield event.plain_result(
+            f"已转发给 {nickname}；取证={result.get('evidence') or '?'}；已核对={bool(result.get('verified'))}"
+        )
+
+    @filter.llm_tool(name="douyin_dm")
+    async def tool_dm(self, event: AstrMessageEvent, nickname: str, text: str,
+                      confirm: bool = False) -> MessageEventResult:
+        """给抖音好友发私信。默认演练：必须由用户确认后传 confirm=true 才会真发。
+
+        Args:
+            nickname(string): 好友完整昵称
+            text(string): 私信正文，不超过 1000 字
+            confirm(boolean): 用户已明确同意发送，才传 true
+        """
+        blocked = await self._browser_ready()
+        if blocked or not self.enable_llm_tools:
+            yield event.plain_result(blocked or "LLM 工具未启用。")
+            return
+        if self.dm_private_only and event.get_group_id():
+            yield event.plain_result("私信不在群里发送（dm_private_only=true）。")
+            return
+        decision = self.policy.check("dm", nickname, confirm=bool(confirm))
+        if decision.mode != "live":
+            yield event.plain_result(
+                f"{decision.message()}\n将要发送：{str(text or '')[:120]}\n"
+                "先让用户确认收件人与正文，再以 confirm=true 调用。"
+            )
+            return
+        result = await self.browser.dm_send(nickname, text)
+        self.policy.record(decision, ok=bool(result.get("ok")), detail=str(result.get("error") or ""))
+        if not result.get("ok"):
+            yield event.plain_result(f"私信未确认成功：{result.get('error')}{self._need_login_hint(result)}")
+            return
+        yield event.plain_result(
+            f"私信已发：{nickname}；消息 ID={result.get('messageId') or '?'}；"
+            f"取证={result.get('evidence') or '?'}"
+        )
+
+    @filter.llm_tool(name="douyin_publish")
+    async def tool_publish(self, event: AstrMessageEvent, path: str, title: str = "",
+                           draft: bool = True, confirm: bool = False) -> MessageEventResult:
+        """投稿视频到抖音创作者中心。默认草稿，必须由用户确认后传 confirm=true。
+
+        Args:
+            path(string): 视频文件绝对路径，必须在 publish_allow_dir 内
+            title(string): 作品标题，留空用日期
+            draft(boolean): true=只存草稿（暂存离开），false=真正发布
+            confirm(boolean): 用户已明确同意投稿，才传 true
+        """
+        blocked = await self._browser_ready()
+        if blocked or not self.enable_llm_tools:
+            yield event.plain_result(blocked or "LLM 工具未启用。")
+            return
+        ok, reason = self.policy.check_publish_path(path)
+        if not ok:
+            yield event.plain_result(f"投稿被拒：{reason}")
+            return
+        decision = self.policy.check("publish", path, confirm=bool(confirm))
+        if decision.mode != "live":
+            yield event.plain_result(
+                f"{decision.message()}\n文件：{path}；标题：{title or '(日期)'}；"
+                f"模式：{'草稿' if draft else '直接发布'}\n等用户确认后以 confirm=true 调用。"
+            )
+            return
+        result = await self.browser.publish(
+            path, title or f"日常 {time.strftime('%Y-%m-%d')}",
+            tags=str(self.config.get("publish_tags") or ""),
+            draft=bool(draft), ai_declare=True,
+        )
+        self.policy.record(decision, ok=bool(result.get("ok")), detail=str(result.get("error") or ""))
+        if not result.get("ok"):
+            yield event.plain_result(f"投稿失败：{result.get('error')}{self._need_login_hint(result)}")
+            return
+        yield event.plain_result(
+            f"投稿完成：{'草稿' if draft else '已发布'}；"
+            f"ID={result.get('platformId') or result.get('draftId') or '?'}；"
+            f"已核对={bool(result.get('verified'))}"
         )
